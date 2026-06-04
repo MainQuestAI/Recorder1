@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The full menu-bar panel UI for the recorder.
 ///
@@ -7,30 +8,18 @@ import SwiftUI
 ///   2. Primary controls — Record (idle) OR Pause/Resume + Save + Trash (recording/paused)
 ///   3. Two level meters — "Desktop (L)" + "Mic (R)" bound to model.desktopLevel/micLevel
 ///   4. Meetings list — title + time range, with a per-row record button; in-progress highlighted
-///   5. Settings disclosure — Identity (your name), Transcription (API key +
-///      auto-transcribe), Auto-stop (toggle + silence timeout + threshold)
-///   6. Footer — open Recordings folder + Quit
+///   5. Footer — Recordings folder + Settings… + Quit
+///
+/// Preferences (your name, Gemini API key, auto-transcribe, the editable prompt,
+/// and silence auto-stop) live in a dedicated Preferences window — see
+/// `PreferencesView` / `PreferencesWindowController` — opened from the footer's
+/// "Settings…" button or ⌘,.
 ///
 /// Pure SwiftUI, compiles under Swift 5 language mode. Reads the shared @Observable model
 /// from the environment and never mutates audio objects directly — it only calls the
 /// model's intent methods (startRecording / togglePause / saveAndStop / trashAndStop / quit).
 struct RecorderPanel: View {
     @Environment(RecorderModel.self) private var model
-
-    /// Whether the settings disclosure is expanded.
-    @State private var showSettings = false
-
-    /// Draft text for the Gemini API key SecureField (never stored in the model).
-    @State private var keyDraft = ""
-    /// Reveal the key field even when a key is already stored (for "Replace").
-    @State private var showKeyField = false
-    /// Whether the (long) Gemini prompt editor is expanded.
-    @State private var showPromptEditor = false
-    /// Working copy for the prompt TextEditor; committed to the model on blur /
-    /// collapse so we don't rewrite UserDefaults on every keystroke.
-    @State private var promptDraft = ""
-    /// Focus tracking for the prompt editor (commit when it loses focus).
-    @FocusState private var promptEditorFocused: Bool
 
     private let panelWidth: CGFloat = 340
 
@@ -62,16 +51,12 @@ struct RecorderPanel: View {
 
             Divider()
 
-            settingsSection
-
-            Divider()
-
             footer
         }
         .padding(12)
         .frame(width: panelWidth)
         // Suppress the auto-drawn focus ring on the first control when the
-        // menu-bar window opens (typing in the API-key field still works).
+        // menu-bar window opens. (All text entry lives in the Preferences window.)
         .focusEffectDisabled()
     }
 
@@ -507,254 +492,10 @@ struct RecorderPanel: View {
         return "\(when) · \(status)"
     }
 
-    // MARK: - 5. Settings
-
-    private var settingsSection: some View {
-        DisclosureGroup(isExpanded: $showSettings) {
-            VStack(alignment: .leading, spacing: 16) {
-                identitySettings
-                Divider()
-                transcriptionSettings
-                Divider()
-                autoStopSettings
-            }
-            .padding(.top, 10)
-        } label: {
-            Label("Settings", systemImage: "gearshape")
-                .font(.subheadline)
-        }
-    }
-
-    /// A small, secondary section header used inside Settings.
-    private func sectionHeader(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-    }
-
-    // MARK: - 5a. Identity (de-hardcoded speaker name)
-
-    private var identitySettings: some View {
-        @Bindable var model = model
-        return VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("Your name", systemImage: "person.crop.circle")
-            TextField("Your name (optional)", text: $model.localSpeakerName)
-                .textFieldStyle(.roundedBorder)
-                .font(.callout)
-            Text("Labels your voice — the microphone, on the right channel — when the transcript guesses who said what. Leave blank to omit.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - 5b. Transcription (API key + auto-transcribe)
-
-    private var transcriptionSettings: some View {
-        @Bindable var model = model
-        return VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Transcription", systemImage: "text.bubble")
-            apiKeySettings
-            Toggle(isOn: $model.autoTranscribe) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Transcribe automatically with Gemini after saving")
-                        .font(.caption)
-                    Text(model.apiKeyIsSet
-                         ? "Each recording is transcribed as soon as it's saved."
-                         : "Add an API key above first.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .disabled(!model.apiKeyIsSet)
-
-            promptEditor
-        }
-    }
-
-    /// Editable Gemini prompt, collapsed behind a disclosure (it's long).
-    private var promptEditor: some View {
-        DisclosureGroup(isExpanded: $showPromptEditor) {
-            VStack(alignment: .leading, spacing: 6) {
-                (Text("The placeholders ")
-                 + Text("{{CHANNEL_LAYOUT}}").bold().monospaced()
-                 + Text(" and ")
-                 + Text("{{CONTEXT}}").bold().monospaced()
-                 + Text(" are filled in automatically with the stereo layout, your name, and the meeting's title + attendees."))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                TextEditor(text: $promptDraft)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(height: 170)
-                    .focused($promptEditorFocused)
-                    .padding(4)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                    )
-                    .onChange(of: promptEditorFocused) { _, focused in
-                        if !focused { commitPromptDraft() }
-                    }
-
-                HStack {
-                    if model.promptTemplateIsCustomized {
-                        Label("Customized", systemImage: "pencil")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Using the built-in prompt.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Reset to default") {
-                        model.resetPromptTemplate()
-                        promptDraft = model.promptTemplate
-                    }
-                    .controlSize(.small)
-                    .disabled(!model.promptTemplateIsCustomized)
-                }
-            }
-            .padding(.top, 6)
-            .onAppear { promptDraft = model.promptTemplate }
-        } label: {
-            Text("Edit transcription prompt")
-                .font(.caption)
-        }
-        .onChange(of: showPromptEditor) { _, expanded in
-            if expanded { promptDraft = model.promptTemplate } else { commitPromptDraft() }
-        }
-    }
-
-    /// Push the editor's working copy into the model (and thus UserDefaults).
-    /// A blank draft normalizes back to the default so the "Customized" state and
-    /// the actual transcription prompt never disagree.
-    private func commitPromptDraft() {
-        let trimmed = promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolved = trimmed.isEmpty ? GeminiTranscriber.defaultPromptTemplate : promptDraft
-        if model.promptTemplate != resolved { model.promptTemplate = resolved }
-        if promptDraft != resolved { promptDraft = resolved }
-    }
-
-    /// Gemini API key entry. Keys live in the Keychain, never in the model.
-    @ViewBuilder
-    private var apiKeySettings: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("API key")
-                    .font(.caption)
-                Spacer()
-                if model.apiKeyIsSet {
-                    Label("In Keychain", systemImage: "key.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if model.apiKeyIsSet && !showKeyField {
-                HStack(spacing: 8) {
-                    Text("Stored securely.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Replace") { showKeyField = true }
-                        .controlSize(.small)
-                    Button("Remove", role: .destructive) { model.clearAPIKey() }
-                        .controlSize(.small)
-                }
-            } else {
-                if !model.apiKeyIsSet {
-                    Text("Paste a Google AI Studio key to enable transcription.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                keyEntryRow
-            }
-        }
-    }
-
-    // MARK: - 5c. Auto-stop on silence
-
-    private var autoStopSettings: some View {
-        @Bindable var model = model
-        return VStack(alignment: .leading, spacing: 10) {
-            Toggle(isOn: $model.silenceAutoStopEnabled) {
-                sectionHeader("Stop after silence", systemImage: "stopwatch")
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-
-            if model.silenceAutoStopEnabled {
-                // Silence timeout, edited in minutes, stored as seconds.
-                HStack {
-                    Text("After")
-                        .font(.caption)
-                    Spacer()
-                    Stepper(
-                        value: Binding(
-                            get: { Int((model.silenceTimeout / 60).rounded()) },
-                            set: { model.silenceTimeout = TimeInterval(max(1, $0) * 60) }
-                        ),
-                        in: 1...60
-                    ) {
-                        Text("\(Int((model.silenceTimeout / 60).rounded())) min of silence")
-                            .font(.caption)
-                            .monospacedDigit()
-                    }
-                    .fixedSize()
-                }
-
-                // Silence threshold in dBFS.
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text("Silence threshold")
-                            .font(.caption)
-                        Spacer()
-                        Text("\(Int(model.silenceThresholdDB)) dB")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(
-                        value: $model.silenceThresholdDB,
-                        in: -80 ... -20,
-                        step: 1
-                    )
-                }
-            }
-        }
-    }
-
-    private var keyEntryRow: some View {
-        HStack(spacing: 6) {
-            SecureField("AIza…", text: $keyDraft)
-                .textFieldStyle(.roundedBorder)
-                .font(.caption)
-            Button("Save") {
-                model.saveAPIKey(keyDraft)
-                keyDraft = ""
-                showKeyField = false
-            }
-            .controlSize(.small)
-            .disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
-            if showKeyField {
-                Button("Cancel") {
-                    keyDraft = ""
-                    showKeyField = false
-                }
-                .controlSize(.small)
-            }
-        }
-    }
-
     // MARK: - 6. Footer
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 14) {
             Button {
                 model.openRecordingsFolder()
             } label: {
@@ -766,6 +507,15 @@ struct RecorderPanel: View {
             Spacer()
 
             Button {
+                openPreferences()
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(",", modifiers: [.command])
+            .help("Open Preferences")
+
+            Button {
                 model.quit()
             } label: {
                 Label("Quit", systemImage: "power")
@@ -773,6 +523,13 @@ struct RecorderPanel: View {
             .buttonStyle(.borderless)
             .keyboardShortcut("q", modifiers: [.command])
         }
+    }
+
+    /// Open the dedicated Preferences window. The controller handles activating
+    /// the app and bringing the window front — necessary for a menu-bar–only
+    /// (`.accessory`) app, where windows otherwise open behind other apps.
+    private func openPreferences() {
+        PreferencesWindowController.shared.show(model: model)
     }
 
     // MARK: - Formatting helpers
