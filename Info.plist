@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.tobi.Recorder</string>
+	<key>CFBundleName</key>
+	<string>Recorder</string>
+	<key>CFBundleExecutable</key>
+	<string>Recorder</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Recorder captures your microphone so your voice is included in meeting recordings.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Recorder captures system audio so the other participants in your meetings are recorded.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Recorder reads your calendar to name recordings after the meeting you are in.</string>
+</dict>
+</plist>

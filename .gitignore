@@ -1,0 +1,21 @@
+# Swift Package Manager build output
+.build/
+.swiftpm/
+Package.resolved
+
+# Assembled app bundle (produced by ./build.sh)
+Recorder.app/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+xcuserdata/
+
+# Local recordings (in case anyone runs from inside the repo)
+Recordings/
+*.caf
+*.m4a
