@@ -14,6 +14,7 @@ enum Preferences {
         static let silenceThresholdDB = "silenceThresholdDB"
         static let silenceAutoStop    = "silenceAutoStopEnabled"
         static let autoTranscribe     = "autoTranscribeAfterSave"
+        static let promptTemplate     = "geminiPromptTemplate"
     }
 
     /// Your name — used only as transcription context to label the local voice
@@ -46,5 +47,13 @@ enum Preferences {
     static var autoTranscribe: Bool {
         get { defaults.object(forKey: Key.autoTranscribe) == nil ? true : defaults.bool(forKey: Key.autoTranscribe) }
         set { defaults.set(newValue, forKey: Key.autoTranscribe) }
+    }
+
+    /// User-customized Gemini transcription prompt. **Empty means "use the built-in
+    /// default"** — we store empty rather than a copy of the default so that future
+    /// improvements to the default prompt still reach users who never customized it.
+    static var promptTemplate: String {
+        get { defaults.string(forKey: Key.promptTemplate) ?? "" }
+        set { defaults.set(newValue, forKey: Key.promptTemplate) }
     }
 }

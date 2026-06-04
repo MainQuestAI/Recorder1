@@ -41,6 +41,15 @@ final class RecorderModel {
     var autoTranscribe: Bool = true {
         didSet { Preferences.autoTranscribe = autoTranscribe }
     }
+    /// Editable Gemini prompt. Holds the *effective* text (built-in default until
+    /// the user customizes it). Persisted as empty when it matches the default so
+    /// default-prompt improvements still propagate (see `Preferences.promptTemplate`).
+    var promptTemplate: String = GeminiTranscriber.defaultPromptTemplate {
+        didSet {
+            Preferences.promptTemplate =
+                (promptTemplate == GeminiTranscriber.defaultPromptTemplate) ? "" : promptTemplate
+        }
+    }
 
     // Transcription (post-save).
     var transcriptionState: TranscriptionState = .idle
@@ -144,6 +153,20 @@ final class RecorderModel {
         silenceThresholdDB = Preferences.silenceThresholdDB
         silenceAutoStopEnabled = Preferences.silenceAutoStop
         autoTranscribe = Preferences.autoTranscribe
+        let storedTemplate = Preferences.promptTemplate
+        promptTemplate = storedTemplate.isEmpty ? GeminiTranscriber.defaultPromptTemplate : storedTemplate
+    }
+
+    /// Whether the prompt differs from the built-in default (drives the Reset button).
+    /// Blank counts as "not customized" — it transcribes with the default anyway.
+    var promptTemplateIsCustomized: Bool {
+        let trimmed = promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && promptTemplate != GeminiTranscriber.defaultPromptTemplate
+    }
+
+    /// Restore the built-in Gemini prompt.
+    func resetPromptTemplate() {
+        promptTemplate = GeminiTranscriber.defaultPromptTemplate
     }
 
     // MARK: - Recording control
@@ -438,7 +461,10 @@ final class RecorderModel {
         transcriptionState = .running
         statusMessage = "Transcribing…"
 
-        let transcriber = self.transcriber
+        var transcriber = self.transcriber
+        transcriber.promptTemplate =
+            promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? GeminiTranscriber.defaultPromptTemplate : promptTemplate
         let trimmedName = localSpeakerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = GeminiTranscriber.Context(
             meetingTitle: pending.meetingTitle,

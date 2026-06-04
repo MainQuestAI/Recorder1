@@ -24,6 +24,13 @@ struct RecorderPanel: View {
     @State private var keyDraft = ""
     /// Reveal the key field even when a key is already stored (for "Replace").
     @State private var showKeyField = false
+    /// Whether the (long) Gemini prompt editor is expanded.
+    @State private var showPromptEditor = false
+    /// Working copy for the prompt TextEditor; committed to the model on blur /
+    /// collapse so we don't rewrite UserDefaults on every keystroke.
+    @State private var promptDraft = ""
+    /// Focus tracking for the prompt editor (commit when it loses focus).
+    @FocusState private var promptEditorFocused: Bool
 
     private let panelWidth: CGFloat = 340
 
@@ -550,19 +557,87 @@ struct RecorderPanel: View {
             apiKeySettings
             Toggle(isOn: $model.autoTranscribe) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Transcribe automatically after saving")
+                    Text("Transcribe automatically with Gemini after saving")
                         .font(.caption)
-                    if !model.apiKeyIsSet {
-                        Text("Add an API key above first.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(model.apiKeyIsSet
+                         ? "Each recording is transcribed as soon as it's saved."
+                         : "Add an API key above first.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             .toggleStyle(.switch)
             .controlSize(.small)
             .disabled(!model.apiKeyIsSet)
+
+            promptEditor
         }
+    }
+
+    /// Editable Gemini prompt, collapsed behind a disclosure (it's long).
+    private var promptEditor: some View {
+        DisclosureGroup(isExpanded: $showPromptEditor) {
+            VStack(alignment: .leading, spacing: 6) {
+                (Text("The placeholders ")
+                 + Text("{{CHANNEL_LAYOUT}}").bold().monospaced()
+                 + Text(" and ")
+                 + Text("{{CONTEXT}}").bold().monospaced()
+                 + Text(" are filled in automatically with the stereo layout, your name, and the meeting's title + attendees."))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextEditor(text: $promptDraft)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 170)
+                    .focused($promptEditorFocused)
+                    .padding(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                    .onChange(of: promptEditorFocused) { _, focused in
+                        if !focused { commitPromptDraft() }
+                    }
+
+                HStack {
+                    if model.promptTemplateIsCustomized {
+                        Label("Customized", systemImage: "pencil")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Using the built-in prompt.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Reset to default") {
+                        model.resetPromptTemplate()
+                        promptDraft = model.promptTemplate
+                    }
+                    .controlSize(.small)
+                    .disabled(!model.promptTemplateIsCustomized)
+                }
+            }
+            .padding(.top, 6)
+            .onAppear { promptDraft = model.promptTemplate }
+        } label: {
+            Text("Edit transcription prompt")
+                .font(.caption)
+        }
+        .onChange(of: showPromptEditor) { _, expanded in
+            if expanded { promptDraft = model.promptTemplate } else { commitPromptDraft() }
+        }
+    }
+
+    /// Push the editor's working copy into the model (and thus UserDefaults).
+    /// A blank draft normalizes back to the default so the "Customized" state and
+    /// the actual transcription prompt never disagree.
+    private func commitPromptDraft() {
+        let trimmed = promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = trimmed.isEmpty ? GeminiTranscriber.defaultPromptTemplate : promptDraft
+        if model.promptTemplate != resolved { model.promptTemplate = resolved }
+        if promptDraft != resolved { promptDraft = resolved }
     }
 
     /// Gemini API key entry. Keys live in the Keychain, never in the model.

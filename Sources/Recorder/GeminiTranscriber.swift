@@ -84,6 +84,16 @@ struct GeminiTranscriber {
     /// Gemini model id. Default is the recommended one-shot Flash model.
     var model: String = "gemini-3-flash-preview"
 
+    /// The diarization / cleanup prompt. Editable from Settings. Two placeholders
+    /// are filled in at transcription time from runtime state and may appear
+    /// anywhere in the template:
+    ///   - `{{CHANNEL_LAYOUT}}` — the stereo left/right channel description
+    ///     (the right-channel line names the local speaker when one is set).
+    ///   - `{{CONTEXT}}` — meeting title, invited attendees, and the local-speaker
+    ///     hint, when available (empty otherwise).
+    /// Defaults to ``defaultPromptTemplate``.
+    var promptTemplate: String = GeminiTranscriber.defaultPromptTemplate
+
     private let base = "https://generativelanguage.googleapis.com"
 
     // MARK: - Public
@@ -93,7 +103,7 @@ struct GeminiTranscriber {
         let mime = Self.mime(for: audioURL)
         let uploaded = try await upload(audioURL, apiKey: apiKey, mime: mime)
         let activeURI = try await waitUntilActive(uploaded, apiKey: apiKey)
-        let prompt = Self.makePrompt(context: context)
+        let prompt = Self.makePrompt(context: context, template: promptTemplate)
         return try await generate(prompt: prompt, fileURI: activeURI, mime: mime, apiKey: apiKey)
     }
 
@@ -237,50 +247,78 @@ struct GeminiTranscriber {
 
     // MARK: - Prompt
 
-    static func makePrompt(context: Context) -> String {
-        let localName = context.localSpeakerName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rightChannelLine: String
-        let localHint: String
-        if let localName, !localName.isEmpty {
-            rightChannelLine = "- RIGHT channel = the local microphone: the person making this recording (usually \(localName)), plus anyone physically in the room."
-            localHint = " The local speaker (right channel) is usually \(localName), so the right-channel voice is most likely \(localName) unless the audio clearly indicates otherwise."
-        } else {
-            rightChannelLine = "- RIGHT channel = the local microphone: the person making this recording, plus anyone physically in the room."
-            localHint = ""
-        }
+    /// The built-in transcription prompt. `{{CHANNEL_LAYOUT}}` and `{{CONTEXT}}`
+    /// are substituted per-recording by ``makePrompt(context:template:)``. Users
+    /// can override the whole thing in Settings; an empty override falls back here.
+    static let defaultPromptTemplate = """
+    The input is a STEREO audio recording of a meeting or call with multiple participants talking.
+    Produce a professionally cleaned-up transcript of the audio.
 
-        var lines = [
-            "The input is a STEREO audio recording of a meeting or call with multiple participants talking.",
-            "Produce a professionally cleaned-up transcript of the audio.",
-            "",
+    {{CHANNEL_LAYOUT}}
+
+    Requirements:
+    - Do NOT shift meaning. Remove disfluencies (um, uh, repeats, false starts). Preserve intent and voice.
+    - Fix obvious speech-to-text artifacts using audible context.
+    - Distinguish speakers by VOICE (timbre, cadence, accent) and by channel (left = remote, right = local). Label them consistently as `Speaker 1`, `Speaker 2`, etc., in order of first appearance. Do NOT put real names in the transcript body, even if names are mentioned in the audio.
+    - Format as Markdown.
+    - Transcript line format: `[HH:MM:SS] **Speaker N**: paragraph`.
+    - Mark unclear audio as `[unclear]`.
+    - Transcribe the FULL audio, not a summary.
+
+    At the END of the output, add a section titled `## Speaker identity guesses`. For each `Speaker N`, give your best guess of who they are, based only on what is said in the audio (names used, self-introductions, stated role/company), the channel they appear on (left = remote, right = local), and the supplied context when it lines up. State the evidence briefly. If there is no basis, say 'identity not stated in audio'. Clearly label these as guesses.
+
+    {{CONTEXT}}
+    """
+
+    /// Render `template` for one recording: fill `{{CHANNEL_LAYOUT}}` and
+    /// `{{CONTEXT}}` from `context`. Empty substitutions leave no blank gaps; a
+    /// non-empty context with no `{{CONTEXT}}` placeholder is appended at the end
+    /// so calendar context is never silently dropped.
+    static func makePrompt(context: Context, template: String = defaultPromptTemplate) -> String {
+        let base = template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? defaultPromptTemplate : template
+
+        let localName = context.localSpeakerName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasName = (localName?.isEmpty == false)
+
+        // {{CHANNEL_LAYOUT}}
+        let rightChannelLine = hasName
+            ? "- RIGHT channel = the local microphone: the person making this recording (usually \(localName!)), plus anyone physically in the room."
+            : "- RIGHT channel = the local microphone: the person making this recording, plus anyone physically in the room."
+        let channelLayout = [
             "Channel layout (important — use it to separate speakers):",
             "- LEFT channel = desktop / system audio: typically the REMOTE participants heard through the speakers (e.g. people on a video call).",
             rightChannelLine,
-            "",
-            "Requirements:",
-            "- Do NOT shift meaning. Remove disfluencies (um, uh, repeats, false starts). Preserve intent and voice.",
-            "- Fix obvious speech-to-text artifacts using audible context.",
-            "- Distinguish speakers by VOICE (timbre, cadence, accent) and by channel (left = remote, right = local). Label them consistently as `Speaker 1`, `Speaker 2`, etc., in order of first appearance. Do NOT put real names in the transcript body, even if names are mentioned in the audio.",
-            "- Format as Markdown.",
-            "- Transcript line format: `[HH:MM:SS] **Speaker N**: paragraph`.",
-            "- Mark unclear audio as `[unclear]`.",
-            "- Transcribe the FULL audio, not a summary.",
-            "",
-            "At the END of the output, add a section titled `## Speaker identity guesses`. For each `Speaker N`, give your best guess of who they are, based only on what is said in the audio (names used, self-introductions, stated role/company), the channel they appear on (left = remote, right = local), and the supplied attendee list when it lines up.\(localHint) State the evidence briefly. If there is no basis, say 'identity not stated in audio'. Clearly label these as guesses.",
-        ]
+        ].joined(separator: "\n")
 
+        // {{CONTEXT}}
         var ctx: [String] = []
+        if hasName {
+            ctx.append("- The local speaker (right channel) is usually \(localName!); the right-channel voice is most likely \(localName!) unless the audio clearly indicates otherwise.")
+        }
         if let title = context.meetingTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            ctx.append("Meeting title: \(title)")
+            ctx.append("- Meeting title: \(title)")
         }
         if !context.attendees.isEmpty {
-            ctx.append("Invited attendees (from the calendar event): \(context.attendees.joined(separator: ", ")).")
-            ctx.append("Not everyone invited necessarily attended or spoke — use this only to improve name guesses and to fix mis-heard names.")
+            ctx.append("- Invited attendees (from the calendar event): \(context.attendees.joined(separator: ", ")). Not everyone invited necessarily attended or spoke — use this only to improve name guesses and to fix mis-heard names.")
         }
-        if !ctx.isEmpty {
-            lines += ["", "User-supplied context (use only this, not outside knowledge):"] + ctx
+        let contextBlock = ctx.isEmpty
+            ? ""
+            : (["Additional context (use only this, not outside knowledge):"] + ctx).joined(separator: "\n")
+
+        // Substitute.
+        var prompt = base.replacingOccurrences(of: "{{CHANNEL_LAYOUT}}", with: channelLayout)
+        if prompt.contains("{{CONTEXT}}") {
+            prompt = prompt.replacingOccurrences(of: "{{CONTEXT}}", with: contextBlock)
+        } else if !contextBlock.isEmpty {
+            prompt += "\n\n" + contextBlock
         }
-        return lines.joined(separator: "\n")
+
+        // Collapse blank gaps left by an empty placeholder, then trim.
+        while prompt.contains("\n\n\n") {
+            prompt = prompt.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        return prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - MIME
