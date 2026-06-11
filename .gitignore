@@ -19,3 +19,8 @@ xcuserdata/
 Recordings/
 *.caf
 *.m4a
+
+# Icon build scratch (icon.swift + Recorder.icns are committed; these are regenerable)
+icon-work/
+Recorder.iconset/
+Recorder-1024.png
