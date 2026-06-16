@@ -5,6 +5,7 @@ Package.resolved
 
 # Assembled app bundle (produced by ./build.sh)
 Recorder.app/
+MeetingCapture.app/
 
 # macOS
 .DS_Store

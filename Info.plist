@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.tobi.Recorder</string>
+	<string>com.dingcheng.MeetingCapture</string>
 	<key>CFBundleName</key>
-	<string>Recorder</string>
+	<string>Meeting Capture</string>
 	<key>CFBundleExecutable</key>
 	<string>Recorder</string>
 	<key>CFBundleIconFile</key>
@@ -21,10 +21,10 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Recorder captures your microphone so your voice is included in meeting recordings.</string>
+	<string>Meeting Capture records your microphone so your voice is included in meeting audio.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Recorder captures system audio so the other participants in your meetings are recorded.</string>
+	<string>Meeting Capture records system audio so remote meeting participants are included.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Recorder reads your calendar to name recordings after the meeting you are in.</string>
+	<string>Meeting Capture reads your calendar to name recordings after the meeting you are in.</string>
 </dict>
 </plist>

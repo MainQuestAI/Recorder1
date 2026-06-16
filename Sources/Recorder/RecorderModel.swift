@@ -20,11 +20,6 @@ final class RecorderModel {
 
     // MARK: - Persisted preferences (mirrored to UserDefaults via Preferences)
 
-    /// Your name — labels the local (mic / right-channel) voice in transcripts.
-    /// Empty = omit. Replaces the old hardcoded speaker name.
-    var localSpeakerName: String = "" {
-        didSet { Preferences.speakerName = localSpeakerName }
-    }
     /// Auto-stop after this many seconds of two-channel silence.
     var silenceTimeout: TimeInterval = 300 {
         didSet { Preferences.silenceTimeout = silenceTimeout }
@@ -37,26 +32,27 @@ final class RecorderModel {
     var silenceAutoStopEnabled: Bool = true {
         didSet { Preferences.silenceAutoStop = silenceAutoStopEnabled }
     }
-    /// Whether to transcribe automatically after a recording is saved.
-    var autoTranscribe: Bool = true {
-        didSet { Preferences.autoTranscribe = autoTranscribe }
+    /// Empty means auto-resolve lark-cli from known Homebrew/npm locations and PATH.
+    var larkCLIPath: String = "" {
+        didSet { Preferences.larkCLIPath = larkCLIPath }
     }
-    /// Editable Gemini prompt. Holds the *effective* text (built-in default until
-    /// the user customizes it). Persisted as empty when it matches the default so
-    /// default-prompt improvements still propagate (see `Preferences.promptTemplate`).
-    var promptTemplate: String = GeminiTranscriber.defaultPromptTemplate {
-        didSet {
-            Preferences.promptTemplate =
-                (promptTemplate == GeminiTranscriber.defaultPromptTemplate) ? "" : promptTemplate
-        }
+    /// Whether to upload automatically after audio.m4a is saved.
+    var autoUploadAfterSave: Bool = true {
+        didSet { Preferences.autoUploadAfterSave = autoUploadAfterSave }
+    }
+    var fetchNotesAfterUpload: Bool = true {
+        didSet { Preferences.fetchNotesAfterUpload = fetchNotesAfterUpload }
+    }
+    var copyMinuteURLAfterUpload: Bool = false {
+        didSet { Preferences.copyMinuteURLAfterUpload = copyMinuteURLAfterUpload }
+    }
+    var openMinuteURLAfterUpload: Bool = false {
+        didSet { Preferences.openMinuteURLAfterUpload = openMinuteURLAfterUpload }
     }
 
-    // Transcription (post-save).
-    var transcriptionState: TranscriptionState = .idle
-    var lastTranscriptText: String? = nil
-    var lastTranscriptURL: URL? = nil
-    /// Whether a Gemini API key is available in the Keychain.
-    var apiKeyIsSet: Bool = false
+    // Feishu upload (post-save).
+    var uploadState: UploadState = .idle
+    var lastMinuteURL: URL? = nil
 
     /// The most recent recordings on disk (loaded at launch + after changes).
     var recentRecordings: [RecordingEntry] = []
@@ -67,25 +63,17 @@ final class RecorderModel {
     @ObservationIgnored private let mic = MicCapture()
     @ObservationIgnored private let calendar = CalendarAccess()
     @ObservationIgnored private let notifications = NotificationManager()
-    @ObservationIgnored private let transcriber = GeminiTranscriber()
     @ObservationIgnored private var silenceMonitor: SilenceMonitor?
 
     @ObservationIgnored private var elapsedTimer: Timer?
     @ObservationIgnored private var recordingStartedAt: Date?
 
-    /// The meeting (if any) the current recording is attached to — kept so its
-    /// title + attendees are available as transcription context at save time.
+    /// The meeting (if any) the current recording is attached to.
     @ObservationIgnored private var activeMeeting: Meeting?
 
-    /// Everything needed to (re)run a transcription, captured at save time.
-    private struct PendingTranscription {
-        let audioURL: URL
-        let folderURL: URL
-        let meetingTitle: String?
-        let attendees: [String]
-        let startedAt: Date
-    }
-    @ObservationIgnored private var lastTranscription: PendingTranscription?
+    /// Everything needed to retry a Feishu upload, captured at save time.
+    @ObservationIgnored private var lastUploadJob: FeishuUploadJob?
+    @ObservationIgnored private var preparingToRecord = false
 
     // MARK: - Lifecycle
 
@@ -93,23 +81,12 @@ final class RecorderModel {
         // Load persisted preferences first so the UI reflects them immediately.
         loadPreferences()
 
-        // Seed the Keychain from GEMINI_API_KEY on first run (handy when the app is
-        // launched from a shell that has the key exported; GUI launches won't inherit
-        // it, so the Keychain is the durable store thereafter).
-        if GeminiKeychain.read() == nil,
-           let env = ProcessInfo.processInfo.environment["GEMINI_API_KEY"],
-           !env.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            GeminiKeychain.save(env)
-        }
-        apiKeyIsSet = GeminiKeychain.read() != nil
-
         // Load prior recordings from disk so they survive restarts.
         refreshRecordings()
 
-        // Request permissions concurrently, then load meetings.
-        Task { @MainActor in
-            _ = await MicCapture.requestAccess()
-        }
+        // Request calendar access and load meetings. Microphone permission is
+        // requested only when the user starts recording so the system prompt is
+        // tied to an explicit action.
         Task { @MainActor in
             _ = await calendar.requestAccess()
             refreshMeetings()
@@ -148,30 +125,38 @@ final class RecorderModel {
     /// Pull persisted preferences into the observable properties. The `didSet`
     /// write-backs are idempotent (same value in → same value out).
     private func loadPreferences() {
-        localSpeakerName = Preferences.speakerName
         silenceTimeout = Preferences.silenceTimeout
         silenceThresholdDB = Preferences.silenceThresholdDB
         silenceAutoStopEnabled = Preferences.silenceAutoStop
-        autoTranscribe = Preferences.autoTranscribe
-        let storedTemplate = Preferences.promptTemplate
-        promptTemplate = storedTemplate.isEmpty ? GeminiTranscriber.defaultPromptTemplate : storedTemplate
-    }
-
-    /// Whether the prompt differs from the built-in default (drives the Reset button).
-    /// Blank counts as "not customized" — it transcribes with the default anyway.
-    var promptTemplateIsCustomized: Bool {
-        let trimmed = promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && promptTemplate != GeminiTranscriber.defaultPromptTemplate
-    }
-
-    /// Restore the built-in Gemini prompt.
-    func resetPromptTemplate() {
-        promptTemplate = GeminiTranscriber.defaultPromptTemplate
+        larkCLIPath = Preferences.larkCLIPath
+        autoUploadAfterSave = Preferences.autoUploadAfterSave
+        fetchNotesAfterUpload = Preferences.fetchNotesAfterUpload
+        copyMinuteURLAfterUpload = Preferences.copyMinuteURLAfterUpload
+        openMinuteURLAfterUpload = Preferences.openMinuteURLAfterUpload
     }
 
     // MARK: - Recording control
 
     func startRecording(meeting: Meeting?) {
+        guard state == .idle, !preparingToRecord else { return }
+        preparingToRecord = true
+        statusMessage = "Checking microphone permission..."
+        NSApp.activate(ignoringOtherApps: true)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let micAllowed = await MicCapture.requestAccess()
+            guard micAllowed else {
+                self.preparingToRecord = false
+                self.statusMessage = "Microphone permission is required. Allow it in System Settings."
+                return
+            }
+            self.preparingToRecord = false
+            self.beginRecording(meeting: meeting)
+        }
+    }
+
+    private func beginRecording(meeting: Meeting?) {
         guard state == .idle else { return }
 
         let now = Date()
@@ -184,12 +169,12 @@ final class RecorderModel {
         }
         currentSession = session
         activeMeeting = meeting
+        UploadStatusStore.writeInitial(session: session, meeting: meeting)
 
-        // Clear any previous recording's transcription UI.
-        transcriptionState = .idle
-        lastTranscriptText = nil
-        lastTranscriptURL = nil
-        lastTranscription = nil
+        // Clear any previous recording's upload UI.
+        uploadState = .idle
+        lastMinuteURL = nil
+        lastUploadJob = nil
 
         // Silence monitor (auto-stop after prolonged silence on both channels).
         // Only armed when the user has auto-stop enabled.
@@ -230,8 +215,11 @@ final class RecorderModel {
             statusMessage = "Could not start capture: \(error.localizedDescription)"
             _ = tap.stop()
             _ = mic.stop()
+            UploadStatusStore.markCaptureFailed(session: session, meeting: meeting, error: error)
             currentSession = nil
+            activeMeeting = nil
             silenceMonitor = nil
+            refreshRecordings()
             return
         }
 
@@ -283,6 +271,7 @@ final class RecorderModel {
         let micURL = session.micURL
         let folderURL = session.folderURL
         let startedAt = session.startedAt
+        let endedAt = Date()
         let meetingTitle = activeMeeting?.title ?? session.meetingTitle
         let attendees = activeMeeting?.attendees ?? []
         Task.detached(priority: .utility) {
@@ -294,25 +283,28 @@ final class RecorderModel {
                     micResult: micResult,
                     outputURL: outputURL
                 )
+                let audioQuality = try? AudioQualityAnalyzer.analyze(audioURL: outputURL)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
-                    let pending = PendingTranscription(
+                    let job = FeishuUploadJob(
                         audioURL: outputURL,
                         folderURL: folderURL,
                         meetingTitle: meetingTitle,
                         attendees: attendees,
-                        startedAt: startedAt
+                        startedAt: startedAt,
+                        endedAt: endedAt
                     )
-                    if self.autoTranscribe {
+                    UploadStatusStore.markSaved(job: job)
+                    if let audioQuality {
+                        UploadStatusStore.markAudioQuality(folderURL: folderURL, report: audioQuality)
+                    }
+                    self.lastUploadJob = job
+                    if self.autoUploadAfterSave {
                         self.statusMessage = "Saved \(outputURL.lastPathComponent)"
-                        // Chain transcription off the successful mix.
-                        self.startTranscription(pending)
+                        self.startUpload(job)
                     } else {
-                        // Auto-transcribe off: keep the recording; the user can
-                        // transcribe it later from the Recent list.
-                        self.lastTranscription = pending
-                        self.transcriptionState = .idle
-                        self.statusMessage = "Saved \(outputURL.lastPathComponent) · transcription off"
+                        self.uploadState = .idle
+                        self.statusMessage = "Saved \(outputURL.lastPathComponent) · auto upload off"
                     }
                     self.refreshRecordings()
                 }
@@ -348,10 +340,9 @@ final class RecorderModel {
         activeMeeting = nil
         silenceMonitor = nil
         statusMessage = "Discarded"
-        transcriptionState = .idle
-        lastTranscriptText = nil
-        lastTranscriptURL = nil
-        lastTranscription = nil
+        uploadState = .idle
+        lastMinuteURL = nil
+        lastUploadJob = nil
         refreshRecordings()
     }
 
@@ -363,7 +354,7 @@ final class RecorderModel {
     /// The meeting currently in progress, if any. All-day events are already
     /// excluded from `meetings`, so this only matches timed meetings. Used as the
     /// default target for the main Record button so recording while you're in a
-    /// meeting auto-tags it (folder name + end alert + transcription context).
+    /// meeting auto-tags it (folder name + end alert + metadata context).
     var currentMeeting: Meeting? {
         let now = Date()
         return meetings.first(where: { $0.isInProgress(now) })
@@ -408,129 +399,98 @@ final class RecorderModel {
         elapsed = 0
     }
 
-    // MARK: - Transcription
+    // MARK: - Feishu upload
 
-    /// Resolve the Gemini key: Keychain first, then the process environment.
-    private func resolvedAPIKey() -> String? {
-        if let stored = GeminiKeychain.read() { return stored }
-        if let env = ProcessInfo.processInfo.environment["GEMINI_API_KEY"] {
-            let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return nil
-    }
-
-    /// Save/replace the Gemini API key in the Keychain. If a transcription was
-    /// waiting on a key, it starts immediately.
-    func saveAPIKey(_ raw: String) {
-        guard GeminiKeychain.save(raw) else {
-            statusMessage = "Could not store the API key in the Keychain."
+    func retryUpload() {
+        guard let job = lastUploadJob else {
+            statusMessage = "No saved audio.m4a to upload."
             return
         }
-        apiKeyIsSet = true
-        statusMessage = "API key saved"
-        if case .failed = transcriptionState, let pending = lastTranscription {
-            startTranscription(pending)
-        }
+        startUpload(job)
     }
 
-    /// Remove the stored Gemini API key.
-    func clearAPIKey() {
-        GeminiKeychain.delete()
-        apiKeyIsSet = false
-        statusMessage = "API key removed"
-    }
-
-    /// Re-run the last transcription (after a failure or a freshly entered key).
-    func retryTranscription() {
-        guard let pending = lastTranscription else { return }
-        startTranscription(pending)
-    }
-
-    private func startTranscription(_ pending: PendingTranscription) {
-        lastTranscription = pending
-        lastTranscriptText = nil
-        lastTranscriptURL = nil
-
-        guard let key = resolvedAPIKey() else {
-            transcriptionState = .failed("No Gemini API key set — add one in Settings to transcribe.")
-            statusMessage = "Saved (no API key — transcription skipped)"
+    func uploadExisting(_ entry: RecordingEntry) {
+        guard let audio = entry.audioURL else {
+            statusMessage = "No audio.m4a in that folder."
             return
         }
-
-        transcriptionState = .running
-        statusMessage = "Transcribing…"
-
-        var transcriber = self.transcriber
-        transcriber.promptTemplate =
-            promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? GeminiTranscriber.defaultPromptTemplate : promptTemplate
-        let trimmedName = localSpeakerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let context = GeminiTranscriber.Context(
-            meetingTitle: pending.meetingTitle,
-            attendees: pending.attendees,
-            startedAt: pending.startedAt,
-            localSpeakerName: trimmedName.isEmpty ? nil : trimmedName
+        let metadata = UploadStatusStore.readMetadata(folderURL: entry.folderURL)
+        let job = FeishuUploadJob(
+            audioURL: audio,
+            folderURL: entry.folderURL,
+            meetingTitle: metadata?.meetingTitle ?? entry.title,
+            attendees: metadata?.attendees ?? [],
+            startedAt: metadata?.startedAt ?? entry.date,
+            endedAt: metadata?.endedAt ?? Date()
         )
+        startUpload(job)
+    }
+
+    private func startUpload(_ job: FeishuUploadJob) {
+        lastUploadJob = job
+        uploadState = .running
+        lastMinuteURL = nil
+        statusMessage = "Uploading to Feishu..."
+
+        let cliPath = larkCLIPath
+        let fetchNotes = fetchNotesAfterUpload
+        let shouldCopy = copyMinuteURLAfterUpload
+        let shouldOpen = openMinuteURLAfterUpload
 
         Task { [weak self] in
             do {
-                let markdown = try await transcriber.transcribe(
-                    audioURL: pending.audioURL,
-                    apiKey: key,
-                    context: context
-                )
-                let document = RecorderModel.composeTranscriptDocument(
-                    markdown: markdown,
-                    meetingTitle: pending.meetingTitle,
-                    attendees: pending.attendees,
-                    startedAt: pending.startedAt,
-                    audioName: pending.audioURL.lastPathComponent,
-                    model: transcriber.model
-                )
-                let transcriptURL = pending.folderURL.appendingPathComponent("transcript.md")
-                try document.write(to: transcriptURL, atomically: true, encoding: .utf8)
+                let uploader = FeishuCLIUploader(cliPath: cliPath, fetchNotes: fetchNotes)
+                let result = try await uploader.upload(job: job)
                 await MainActor.run {
                     guard let self else { return }
-                    self.lastTranscriptText = document
-                    self.lastTranscriptURL = transcriptURL
-                    self.transcriptionState = .done(transcriptURL)
-                    self.statusMessage = "Transcript saved (transcript.md)"
+                    self.lastMinuteURL = result.minuteURL
+                    self.uploadState = .uploaded(result.minuteURL)
+                    self.statusMessage = "Uploaded to Feishu Minutes"
+                    if shouldCopy {
+                        self.copyMinuteURL(result.minuteURL)
+                    }
+                    if shouldOpen {
+                        NSWorkspace.shared.open(result.minuteURL)
+                    }
                     self.refreshRecordings()
                 }
             } catch {
-                let message = RecorderModel.describeTranscriptionError(error)
+                let message = RecorderModel.describeUploadError(error)
+                UploadStatusStore.markFailed(job: job, error: error)
                 await MainActor.run {
                     guard let self else { return }
-                    self.transcriptionState = .failed(message)
-                    self.statusMessage = "Transcription failed"
+                    self.uploadState = .failed(message)
+                    self.statusMessage = "Upload failed"
+                    self.refreshRecordings()
                 }
             }
         }
     }
 
-    /// Copy the transcript text to the clipboard.
-    func copyTranscriptText() {
-        guard let text = lastTranscriptText else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        statusMessage = "Transcript text copied"
+    func copyCurrentMinuteURL() {
+        guard let url = lastMinuteURL else { return }
+        copyMinuteURL(url)
     }
 
-    /// Copy the transcript *file* to the clipboard (paste into Finder / Mail / etc.).
-    func copyTranscriptFile() {
-        guard let url = lastTranscriptURL else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([url as NSURL])
-        statusMessage = "Transcript file copied"
+    func openCurrentMinuteURL() {
+        guard let url = lastMinuteURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
-    /// Reveal the transcript in Finder.
-    func revealTranscript() {
-        guard let url = lastTranscriptURL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+    func copyMinuteURL(_ url: URL) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url.absoluteString, forType: .string)
+        statusMessage = "Minute URL copied"
+    }
+
+    func openMinuteURL(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
+
+    func revealLastUploadFolder() {
+        guard let folderURL = lastUploadJob?.folderURL else { return }
+        reveal(folderURL)
     }
 
     // MARK: - Recordings library
@@ -538,21 +498,6 @@ final class RecorderModel {
     /// Reload the recent-recordings list from disk.
     func refreshRecordings() {
         recentRecordings = RecordingsLibrary.recent(limit: 4)
-    }
-
-    /// Transcribe (or re-transcribe) an existing recording's audio.
-    func transcribeExisting(_ entry: RecordingEntry) {
-        guard let audio = entry.audioURL else {
-            statusMessage = "No audio.m4a to transcribe in that folder."
-            return
-        }
-        startTranscription(PendingTranscription(
-            audioURL: audio,
-            folderURL: entry.folderURL,
-            meetingTitle: entry.title,
-            attendees: [],
-            startedAt: entry.date
-        ))
     }
 
     /// Put a file on the clipboard (paste into Finder / Mail / …).
@@ -580,51 +525,18 @@ final class RecorderModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    /// Open ~/Documents/Recordings in Finder (creating it if needed).
+    /// Open ~/Documents/MeetingCapture in Finder (creating it if needed).
     func openRecordingsFolder() {
         guard let root = RecordingsLibrary.recordingsRoot() else { return }
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         NSWorkspace.shared.open(root)
     }
 
-    /// Wrap the model's Markdown with a small header (title / date / attendees).
-    private static func composeTranscriptDocument(
-        markdown: String,
-        meetingTitle: String?,
-        attendees: [String],
-        startedAt: Date,
-        audioName: String,
-        model: String
-    ) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .full
-        formatter.timeStyle = .short
-
-        var header = "# Transcript"
-        if let title = meetingTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            header += " — \(title)"
-        }
-
-        var lines = [header, ""]
-        lines.append("- **Recorded:** \(formatter.string(from: startedAt))")
-        if !attendees.isEmpty {
-            lines.append("- **Invited attendees:** \(attendees.joined(separator: ", "))")
-        }
-        lines.append("- **Audio:** `\(audioName)`")
-        lines.append("- **Model:** Gemini `\(model)`")
-        lines.append("")
-        lines.append("> Channel layout — left = desktop/system audio, right = microphone.")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        lines.append(markdown.trimmingCharacters(in: .whitespacesAndNewlines))
-        lines.append("")
-        return lines.joined(separator: "\n")
-    }
-
-    private static func describeTranscriptionError(_ error: Error) -> String {
-        if let e = error as? GeminiTranscriber.TranscriberError {
-            return e.errorDescription ?? "Transcription failed."
+    private static func describeUploadError(_ error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
         }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain {

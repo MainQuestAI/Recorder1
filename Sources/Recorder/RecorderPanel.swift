@@ -1,6 +1,127 @@
 import SwiftUI
 import AppKit
 
+private enum MQTheme {
+    static let page = Color(red: 3 / 255, green: 3 / 255, blue: 5 / 255)
+    static let elevated = Color.white.opacity(0.03)
+    static let surface = Color.white.opacity(0.05)
+    static let surfaceHover = Color.white.opacity(0.08)
+    static let border = Color.white.opacity(0.08)
+    static let borderStrong = Color.white.opacity(0.15)
+    static let textPrimary = Color.white
+    static let textSecondary = Color(red: 156 / 255, green: 163 / 255, blue: 175 / 255)
+    static let textMuted = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
+    static let success = Color(red: 46 / 255, green: 204 / 255, blue: 113 / 255)
+    static let warning = Color(red: 241 / 255, green: 196 / 255, blue: 15 / 255)
+    static let danger = Color(red: 231 / 255, green: 76 / 255, blue: 60 / 255)
+    static let info = Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255)
+    static let panelRadius: CGFloat = 20
+    static let cardRadius: CGFloat = 10
+    static let buttonRadius: CGFloat = 10
+}
+
+private struct MQCard<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder var content: Content
+
+    init(spacing: CGFloat = 10, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            content
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: MQTheme.cardRadius, style: .continuous)
+                .fill(MQTheme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: MQTheme.cardRadius, style: .continuous)
+                        .stroke(MQTheme.border, lineWidth: 1)
+                )
+        )
+    }
+}
+
+private struct MQDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(MQTheme.border)
+            .frame(height: 1)
+    }
+}
+
+private struct MQButtonStyle: ButtonStyle {
+    enum Kind {
+        case primary(Color)
+        case secondary
+        case icon
+        case danger
+    }
+
+    @Environment(\.isEnabled) private var isEnabled
+    let kind: Kind
+    var compact = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(compact ? .caption.weight(.semibold) : .callout.weight(.semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, compact ? 6 : 8)
+            .frame(minHeight: compact ? 28 : 36)
+            .background(background(isPressed: configuration.isPressed))
+            .clipShape(RoundedRectangle(cornerRadius: MQTheme.buttonRadius, style: .continuous))
+            .opacity(isEnabled ? 1 : 0.42)
+    }
+
+    private var foreground: Color {
+        switch kind {
+        case .primary, .danger:
+            return MQTheme.textPrimary
+        case .secondary, .icon:
+            return isEnabled ? MQTheme.textPrimary : MQTheme.textMuted
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch kind {
+        case .icon:
+            return compact ? 8 : 10
+        default:
+            return compact ? 10 : 12
+        }
+    }
+
+    private func background(isPressed: Bool) -> some View {
+        let fill: Color
+        let stroke: Color
+        switch kind {
+        case .primary(let tint):
+            fill = tint.opacity(isPressed ? 0.72 : 0.86)
+            stroke = tint.opacity(0.72)
+        case .secondary:
+            fill = isPressed ? MQTheme.surfaceHover : MQTheme.elevated
+            stroke = MQTheme.borderStrong
+        case .icon:
+            fill = isPressed ? MQTheme.surfaceHover : Color.white.opacity(0.02)
+            stroke = MQTheme.border
+        case .danger:
+            fill = MQTheme.danger.opacity(isPressed ? 0.60 : 0.72)
+            stroke = MQTheme.danger.opacity(0.7)
+        }
+
+        return RoundedRectangle(cornerRadius: MQTheme.buttonRadius, style: .continuous)
+            .fill(fill)
+            .overlay(
+                RoundedRectangle(cornerRadius: MQTheme.buttonRadius, style: .continuous)
+                    .stroke(stroke, lineWidth: 1)
+            )
+    }
+}
+
 /// The full menu-bar panel UI for the recorder.
 ///
 /// Layout (top -> bottom):
@@ -8,10 +129,9 @@ import AppKit
 ///   2. Primary controls — Record (idle) OR Pause/Resume + Save + Trash (recording/paused)
 ///   3. Two level meters — "Desktop (L)" + "Mic (R)" bound to model.desktopLevel/micLevel
 ///   4. Meetings list — title + time range, with a per-row record button; in-progress highlighted
-///   5. Footer — Recordings folder + Settings… + Quit
+///   5. Footer — MeetingCapture folder + Settings… + Quit
 ///
-/// Preferences (your name, Gemini API key, auto-transcribe, the editable prompt,
-/// and silence auto-stop) live in a dedicated Preferences window — see
+/// Preferences (Feishu CLI upload settings and silence auto-stop) live in a dedicated Preferences window — see
 /// `PreferencesView` / `PreferencesWindowController` — opened from the footer's
 /// "Settings…" button or ⌘,.
 ///
@@ -21,40 +141,43 @@ import AppKit
 struct RecorderPanel: View {
     @Environment(RecorderModel.self) private var model
 
-    private let panelWidth: CGFloat = 340
+    private let panelWidth: CGFloat = 382
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            Divider()
-
             controls
 
-            if showTranscription {
-                Divider()
-                transcriptionSection
+            if showUpload {
+                uploadSection
             }
 
-            Divider()
-
             meters
-
-            Divider()
 
             meetingsSection
 
             if !model.recentRecordings.isEmpty {
-                Divider()
                 recentSection
             }
 
-            Divider()
+            MQDivider()
 
             footer
         }
-        .padding(12)
+        .padding(14)
         .frame(width: panelWidth)
+        .background(
+            RoundedRectangle(cornerRadius: MQTheme.panelRadius, style: .continuous)
+                .fill(MQTheme.page)
+                .overlay(
+                    RoundedRectangle(cornerRadius: MQTheme.panelRadius, style: .continuous)
+                        .stroke(MQTheme.borderStrong, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.50), radius: 24, y: 12)
+        )
+        .foregroundStyle(MQTheme.textPrimary)
+        .preferredColorScheme(.dark)
         // Suppress the auto-drawn focus ring on the first control when the
         // menu-bar window opens. (All text entry lives in the Preferences window.)
         .focusEffectDisabled()
@@ -63,21 +186,27 @@ struct RecorderPanel: View {
     // MARK: - 1. Header
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             // State indicator dot + label.
-            Image(systemName: stateSymbolName)
-                .foregroundStyle(stateColor)
-                .font(.system(size: 14, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
+            ZStack {
+                Circle()
+                    .fill(stateColor.opacity(0.16))
+                    .frame(width: 34, height: 34)
+                Image(systemName: stateSymbolName)
+                    .foregroundStyle(stateColor)
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(stateLabel)
-                    .font(.headline)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(MQTheme.textPrimary)
 
                 if let status = model.statusMessage, !status.isEmpty {
                     Text(status)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(MQTheme.textSecondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -88,16 +217,33 @@ struct RecorderPanel: View {
             // Elapsed time, only meaningful while recording / paused.
             if model.state != .idle {
                 Text(formattedElapsed(model.elapsed))
-                    .font(.system(.title3, design: .monospaced))
-                    .foregroundStyle(model.state == .paused ? .secondary : .primary)
+                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(model.state == .paused ? MQTheme.textSecondary : MQTheme.textPrimary)
                     .monospacedDigit()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: MQTheme.buttonRadius, style: .continuous)
+                            .fill(MQTheme.elevated)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: MQTheme.buttonRadius, style: .continuous)
+                                    .stroke(MQTheme.border, lineWidth: 1)
+                            )
+                    )
             }
         }
+        .padding(.horizontal, 2)
     }
 
     private var stateLabel: String {
         switch model.state {
-        case .idle:      return "Ready"
+        case .idle:
+            switch model.uploadState {
+            case .idle: return "Ready"
+            case .running: return "Uploading"
+            case .uploaded: return "Uploaded"
+            case .failed: return "Upload failed"
+            }
         case .recording: return "Recording"
         case .paused:    return "Paused"
         }
@@ -105,7 +251,13 @@ struct RecorderPanel: View {
 
     private var stateSymbolName: String {
         switch model.state {
-        case .idle:      return "circle"
+        case .idle:
+            switch model.uploadState {
+            case .idle: return "circle"
+            case .running: return "arrow.up.circle.fill"
+            case .uploaded: return "checkmark.circle.fill"
+            case .failed: return "exclamationmark.triangle.fill"
+            }
         case .recording: return "record.circle.fill"
         case .paused:    return "pause.circle.fill"
         }
@@ -113,9 +265,15 @@ struct RecorderPanel: View {
 
     private var stateColor: Color {
         switch model.state {
-        case .idle:      return .secondary
-        case .recording: return .red
-        case .paused:    return .orange
+        case .idle:
+            switch model.uploadState {
+            case .idle: return MQTheme.textMuted
+            case .running: return MQTheme.info
+            case .uploaded: return MQTheme.success
+            case .failed: return MQTheme.warning
+            }
+        case .recording: return MQTheme.danger
+        case .paused:    return MQTheme.warning
         }
     }
 
@@ -128,7 +286,7 @@ struct RecorderPanel: View {
             if let current = model.currentMeeting {
                 // In a meeting: the primary button auto-tags it; the small
                 // secondary button records without attaching to any meeting.
-                VStack(alignment: .leading, spacing: 6) {
+                MQCard(spacing: 8) {
                     HStack(spacing: 8) {
                         Button {
                             model.startRecording(meeting: current)
@@ -137,236 +295,202 @@ struct RecorderPanel: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .controlSize(.large)
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
+                        .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.danger)))
                         .keyboardShortcut("r", modifiers: [.command])
 
                         Button {
                             model.startRecording(meeting: nil)
                         } label: {
                             Image(systemName: "record.circle")
-                                .frame(width: 22)
+                                .frame(width: 22, height: 20)
                         }
                         .controlSize(.large)
-                        .buttonStyle(.bordered)
+                        .buttonStyle(MQButtonStyle(kind: .icon))
                         .help("Record without attaching to a meeting")
                     }
                     Text("Tags this recording as “\(current.title)”.")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(MQTheme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
             } else {
                 // No meeting in progress: a single, plain Record button.
-                Button {
-                    model.startRecording(meeting: nil)
-                } label: {
-                    Label("Record", systemImage: "record.circle.fill")
-                        .frame(maxWidth: .infinity)
+                MQCard {
+                    Button {
+                        model.startRecording(meeting: nil)
+                    } label: {
+                        Label("Record", systemImage: "record.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.danger)))
+                    .keyboardShortcut("r", modifiers: [.command])
                 }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .keyboardShortcut("r", modifiers: [.command])
             }
 
         case .recording, .paused:
-            HStack(spacing: 8) {
+            MQCard {
+                HStack(spacing: 8) {
                 // Pause / Resume toggles between the two recording states.
-                Button {
-                    model.togglePause()
-                } label: {
-                    Label(
-                        model.state == .paused ? "Resume" : "Pause",
-                        systemImage: model.state == .paused ? "play.fill" : "pause.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .controlSize(.large)
-                .buttonStyle(.bordered)
-                .tint(.orange)
+                    Button {
+                        model.togglePause()
+                    } label: {
+                        Label(
+                            model.state == .paused ? "Resume" : "Pause",
+                            systemImage: model.state == .paused ? "play.fill" : "pause.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(MQButtonStyle(kind: .secondary))
 
                 // Save + mix.
-                Button {
-                    model.saveAndStop()
-                } label: {
-                    Label("Save", systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
+                    Button {
+                        model.saveAndStop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.info)))
 
                 // Discard everything.
-                Button(role: .destructive) {
-                    model.trashAndStop()
-                } label: {
-                    Image(systemName: "trash")
+                    Button(role: .destructive) {
+                        model.trashAndStop()
+                    } label: {
+                        Image(systemName: "trash")
+                            .frame(width: 20, height: 20)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(MQButtonStyle(kind: .danger))
+                    .help("Discard this recording")
                 }
-                .controlSize(.large)
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .help("Discard this recording")
             }
         }
     }
 
-    // MARK: - 2b. Transcription
+    // MARK: - 2b. Feishu upload
 
-    private var showTranscription: Bool {
-        model.transcriptionState != .idle
+    private var showUpload: Bool {
+        model.uploadState != .idle
     }
 
     @ViewBuilder
-    private var transcriptionSection: some View {
-        switch model.transcriptionState {
+    private var uploadSection: some View {
+        switch model.uploadState {
         case .idle:
             EmptyView()
 
         case .running:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Transcribing with Gemini…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
+            MQCard {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(MQTheme.info)
+                    Text("Uploading to Feishu Minutes...")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(MQTheme.textSecondary)
+                    Spacer()
+                }
             }
 
-        case .done(let url):
-            VStack(alignment: .leading, spacing: 6) {
+        case .uploaded(let url):
+            MQCard(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Transcript ready")
+                        .foregroundStyle(MQTheme.success)
+                    Text("Uploaded")
                         .font(.callout.weight(.medium))
+                        .foregroundStyle(MQTheme.textPrimary)
                     Spacer()
                 }
 
                 HStack(spacing: 8) {
                     Button {
-                        model.copyTranscriptText()
+                        model.openMinuteURL(url)
                     } label: {
-                        Label("Copy text", systemImage: "doc.on.clipboard")
+                        Label("Open Minute", systemImage: "arrow.up.forward.app")
                     }
-                    .help("Copy the transcript contents to the clipboard")
+                    .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.success), compact: true))
+                    .help("Open Feishu Minutes")
 
                     Button {
-                        model.copyTranscriptFile()
+                        model.copyMinuteURL(url)
                     } label: {
-                        Label("Copy file", systemImage: "doc.on.doc")
+                        Label("Copy URL", systemImage: "link")
                     }
-                    .help("Copy the transcript.md file (paste into Finder, Mail, …)")
+                    .buttonStyle(MQButtonStyle(kind: .secondary, compact: true))
+                    .help("Copy minute_url")
 
                     Button {
-                        model.revealTranscript()
+                        model.revealLastUploadFolder()
                     } label: {
                         Image(systemName: "folder")
+                            .frame(width: 16, height: 16)
                     }
-                    .help("Reveal transcript.md in Finder")
+                    .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
+                    .help("Reveal recording folder")
 
                     Spacer()
                 }
-                .buttonStyle(.bordered)
                 .controlSize(.small)
-
-                // Drag handle — drag transcript.md straight into another window
-                // (Finder, Mail, an editor, a chat). Falls back to the copy/reveal
-                // buttons above if a target doesn't accept the drag.
-                transcriptDragHandle(url)
             }
 
         case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
+            MQCard(spacing: 8) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(MQTheme.warning)
                     Text(message)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(MQTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
-                if model.apiKeyIsSet {
-                    Button {
-                        model.retryTranscription()
-                    } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button {
+                    model.retryUpload()
+                } label: {
+                    Label("Retry Upload", systemImage: "arrow.clockwise")
                 }
+                .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.warning), compact: true))
+                .controlSize(.small)
             }
         }
-    }
-
-    /// A draggable chip representing the transcript file. Dragging it out of the
-    /// panel provides the actual file (via `NSItemProvider(contentsOf:)`), so it
-    /// can be dropped into Finder, attached in Mail, or inserted into an editor.
-    private func transcriptDragHandle(_ url: URL) -> some View {
-        let folder = url.deletingLastPathComponent().lastPathComponent
-        return HStack(spacing: 6) {
-            Image(systemName: "line.3.horizontal")
-                .foregroundStyle(.tertiary)
-                .font(.caption)
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
-            Text(url.lastPathComponent)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
-            Image(systemName: "arrow.up.forward.app")
-                .foregroundStyle(.tertiary)
-                .font(.caption)
-        }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .onDrag {
-            NSItemProvider(contentsOf: url) ?? NSItemProvider()
-        } preview: {
-            Label(url.lastPathComponent, systemImage: "doc.text")
-                .padding(8)
-        }
-        .help("Drag \(folder)/\(url.lastPathComponent) into another app or window")
     }
 
     // MARK: - 3. Level meters
 
     private var meters: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LevelMeter(label: "Desktop (L)", level: model.desktopLevel, tint: .green)
-            LevelMeter(label: "Mic (R)",     level: model.micLevel,     tint: .blue)
+        MQCard(spacing: 9) {
+            LevelMeter(label: "Desktop (L)", level: model.desktopLevel, tint: MQTheme.success)
+            LevelMeter(label: "Mic (R)",     level: model.micLevel,     tint: MQTheme.info)
         }
     }
 
     // MARK: - 4. Meetings
 
     private var meetingsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        MQCard(spacing: 8) {
             HStack {
                 Text("Meetings")
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(MQTheme.textPrimary)
                 Spacer()
                 Button {
                     model.refreshMeetings()
                 } label: {
                     Image(systemName: "arrow.clockwise")
+                        .frame(width: 16, height: 16)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
                 .help("Refresh meetings")
             }
 
             if model.meetings.isEmpty {
                 Text("No meetings nearby.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MQTheme.textMuted)
                     .padding(.vertical, 2)
             } else {
                 VStack(spacing: 4) {
@@ -386,9 +510,10 @@ struct RecorderPanel: View {
     // MARK: - 4b. Recent recordings
 
     private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        MQCard(spacing: 8) {
             Text("Recent recordings")
                 .font(.subheadline.weight(.semibold))
+                .foregroundStyle(MQTheme.textPrimary)
 
             VStack(spacing: 2) {
                 ForEach(model.recentRecordings) { entry in
@@ -401,54 +526,63 @@ struct RecorderPanel: View {
     @ViewBuilder
     private func recentRow(_ entry: RecordingEntry) -> some View {
         HStack(spacing: 8) {
-            // Draggable region: icon + title/subtitle + grip. Dragging it out
-            // provides the transcript file (or the audio if there's no transcript).
+            // Draggable region: transcript if present, else audio.
             HStack(spacing: 8) {
-                Image(systemName: entry.hasTranscript ? "doc.text.fill" : "waveform.circle.fill")
-                    .foregroundStyle(entry.hasTranscript ? Color.accentColor : Color.secondary)
+                Image(systemName: recentIconName(entry))
+                    .foregroundStyle(entry.isUploaded ? MQTheme.success : (entry.hasTranscript ? MQTheme.info : MQTheme.textMuted))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.displayTitle)
                         .font(.callout)
+                        .foregroundStyle(MQTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text(recentSubtitle(entry))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(MQTheme.textSecondary)
                 }
 
                 Spacer(minLength: 4)
 
-                if entry.hasTranscript {
+                if entry.hasTranscript || entry.audioURL != nil {
                     Image(systemName: "line.3.horizontal")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(MQTheme.textMuted)
                         .font(.caption)
                 }
             }
             .contentShape(Rectangle())
             .onDrag { recentDragProvider(entry) }
-            .help(entry.hasTranscript
-                  ? "Drag the transcript out, or use ⋯ for more"
-                  : "Drag the audio out, or use ⋯ to transcribe")
+            .help("Drag the recording artifact out, or use the actions menu")
 
             // Actions menu.
             Menu {
+                if let minuteURL = entry.minuteURL {
+                    Button { model.openMinuteURL(minuteURL) } label: {
+                        Label("Open Minute", systemImage: "arrow.up.forward.app")
+                    }
+                    Button { model.copyMinuteURL(minuteURL) } label: {
+                        Label("Copy Minute URL", systemImage: "link")
+                    }
+                    Divider()
+                }
+
+                if let audio = entry.audioURL {
+                    Button { model.uploadExisting(entry) } label: {
+                        Label(entry.isUploaded ? "Retry Upload" : "Upload to Feishu", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(model.uploadState == .running)
+                    Button { model.copyFileToPasteboard(audio) } label: {
+                        Label("Copy audio file", systemImage: "waveform")
+                    }
+                }
+
                 if let transcript = entry.transcriptURL {
+                    Divider()
                     Button { model.copyTextOfFile(transcript) } label: {
                         Label("Copy transcript text", systemImage: "doc.on.clipboard")
                     }
                     Button { model.copyFileToPasteboard(transcript) } label: {
                         Label("Copy transcript file", systemImage: "doc.on.doc")
-                    }
-                } else if entry.audioURL != nil {
-                    Button { model.transcribeExisting(entry) } label: {
-                        Label("Transcribe", systemImage: "text.bubble")
-                    }
-                    .disabled(!model.apiKeyIsSet || model.transcriptionState == .running)
-                }
-                if let audio = entry.audioURL {
-                    Button { model.copyFileToPasteboard(audio) } label: {
-                        Label("Copy audio file", systemImage: "waveform")
                     }
                 }
                 Divider()
@@ -457,6 +591,7 @@ struct RecorderPanel: View {
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
+                    .foregroundStyle(MQTheme.textSecondary)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -467,7 +602,11 @@ struct RecorderPanel: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
+                .fill(Color.white.opacity(0.035))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(MQTheme.border, lineWidth: 1)
+                )
         )
     }
 
@@ -482,27 +621,42 @@ struct RecorderPanel: View {
         return NSItemProvider()
     }
 
-    /// "6/3/26, 10:15 AM · Transcript" — compact date + status.
+    private func recentIconName(_ entry: RecordingEntry) -> String {
+        if entry.isUploaded { return "checkmark.circle.fill" }
+        if entry.hasTranscript { return "doc.text.fill" }
+        return "waveform.circle.fill"
+    }
+
+    /// "6/3/26, 10:15 AM · Uploaded" — compact date + status.
     private func recentSubtitle(_ entry: RecordingEntry) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         let when = formatter.string(from: entry.date)
-        let status = entry.hasTranscript ? "Transcript" : (entry.audioURL != nil ? "Audio only" : "Raw only")
+        let status: String
+        if entry.isUploaded {
+            status = "Uploaded"
+        } else if entry.uploadStatus == "failed" {
+            status = "Upload failed"
+        } else if entry.audioURL != nil {
+            status = "Audio ready"
+        } else {
+            status = "Raw only"
+        }
         return "\(when) · \(status)"
     }
 
     // MARK: - 6. Footer
 
     private var footer: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             Button {
                 model.openRecordingsFolder()
             } label: {
                 Label("Recordings", systemImage: "folder")
             }
-            .buttonStyle(.borderless)
-            .help("Open ~/Documents/Recordings in Finder")
+            .buttonStyle(MQButtonStyle(kind: .secondary, compact: true))
+            .help("Open ~/Documents/MeetingCapture in Finder")
 
             Spacer()
 
@@ -511,7 +665,7 @@ struct RecorderPanel: View {
             } label: {
                 Label("Settings…", systemImage: "gearshape")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .keyboardShortcut(",", modifiers: [.command])
             .help("Open Preferences")
 
@@ -520,7 +674,7 @@ struct RecorderPanel: View {
             } label: {
                 Label("Quit", systemImage: "power")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .keyboardShortcut("q", modifiers: [.command])
         }
     }
@@ -560,15 +714,21 @@ private struct LevelMeter: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MQTheme.textSecondary)
 
             GeometryReader { geo in
                 let clamped = CGFloat(max(0, min(1, level)))
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.primary.opacity(0.12))
+                        .fill(Color.white.opacity(0.08))
                     Capsule()
-                        .fill(tint.gradient)
+                        .fill(
+                            LinearGradient(
+                                colors: [tint.opacity(0.72), tint],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .frame(width: max(2, geo.size.width * clamped))
                         .animation(.linear(duration: 0.08), value: clamped)
                 }
@@ -592,17 +752,18 @@ private struct MeetingRow: View {
         HStack(spacing: 8) {
             // Live dot for the in-progress meeting.
             Circle()
-                .fill(inProgress ? Color.red : Color.clear)
+                .fill(inProgress ? MQTheme.danger : Color.clear)
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(meeting.title)
                     .font(.callout)
+                    .foregroundStyle(MQTheme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(timeRange(meeting.start, meeting.end))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MQTheme.textSecondary)
             }
 
             Spacer(minLength: 4)
@@ -612,9 +773,10 @@ private struct MeetingRow: View {
                 onRecord()
             } label: {
                 Image(systemName: "record.circle")
-                    .foregroundStyle(canStart ? Color.red : Color.secondary)
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(canStart ? MQTheme.danger : MQTheme.textMuted)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .disabled(!canStart)
             .help("Record this meeting")
         }
@@ -622,7 +784,11 @@ private struct MeetingRow: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(inProgress ? Color.red.opacity(0.10) : Color.clear)
+                .fill(inProgress ? MQTheme.danger.opacity(0.10) : Color.white.opacity(0.02))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(inProgress ? MQTheme.danger.opacity(0.32) : MQTheme.border, lineWidth: 1)
+                )
         )
     }
 

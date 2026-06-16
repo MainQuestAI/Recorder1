@@ -1,6 +1,6 @@
 import Foundation
 
-/// One past recording on disk (a folder under ~/Documents/Recordings).
+/// One past recording on disk (a folder under ~/Documents/MeetingCapture).
 struct RecordingEntry: Identifiable, Equatable {
     /// Folder path — stable identity.
     var id: String { folderURL.path }
@@ -13,8 +13,13 @@ struct RecordingEntry: Identifiable, Equatable {
     let audioURL: URL?
     /// transcript.md, if it exists.
     let transcriptURL: URL?
+    /// Parsed from metadata.json after a successful Feishu upload.
+    let minuteURL: URL?
+    /// Parsed upload status from metadata.json.
+    let uploadStatus: String?
 
     var hasTranscript: Bool { transcriptURL != nil }
+    var isUploaded: Bool { minuteURL != nil || uploadStatus == "uploaded" }
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
         return "Recording"
@@ -22,16 +27,16 @@ struct RecordingEntry: Identifiable, Equatable {
 }
 
 /// Reads the on-disk recordings library so the panel can show prior recordings
-/// (and their transcripts) after a restart — the in-memory list doesn't survive
+/// (and their upload state) after a restart — the in-memory list doesn't survive
 /// relaunches.
 enum RecordingsLibrary {
 
-    /// ~/Documents/Recordings (not created here).
+    /// ~/Documents/MeetingCapture (not created here).
     static func recordingsRoot() -> URL? {
         guard let documents = try? FileManager.default.url(
             for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false
         ) else { return nil }
-        return documents.appendingPathComponent("Recordings", isDirectory: true)
+        return documents.appendingPathComponent("MeetingCapture", isDirectory: true)
     }
 
     /// The `limit` most recent recording folders, newest first.
@@ -63,21 +68,59 @@ enum RecordingsLibrary {
 
             let (parsedDate, title) = parseFolderName(url.lastPathComponent)
             let fileDate = values?.creationDate ?? values?.contentModificationDate ?? .distantPast
+            let metadata = UploadStatusStore.readMetadata(folderURL: url)
+            let minuteURL = metadata?.minuteURL.flatMap(URL.init(string:))
 
             return RecordingEntry(
                 folderURL: url,
-                title: title,
-                date: parsedDate ?? fileDate,
+                title: metadata?.meetingTitle ?? title,
+                date: metadata?.startedAt ?? parsedDate ?? fileDate,
                 audioURL: hasAudio ? audio : nil,
-                transcriptURL: hasTranscript ? transcript : nil
+                transcriptURL: hasTranscript ? transcript : nil,
+                minuteURL: minuteURL,
+                uploadStatus: metadata?.uploadStatus
             )
         }
 
         return Array(entries.sorted { $0.date > $1.date }.prefix(limit))
     }
 
-    /// Parse "yyyy-M-d-HHmm[-title][-N]" into (date, title). Best-effort.
+    /// Parse "yyyy-MM-dd_HHmm[-title][-N]" into (date, title). Best-effort.
     static func parseFolderName(_ name: String) -> (Date?, String?) {
+        let headAndTitle = name.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard let head = headAndTitle.first else {
+            return (nil, name.isEmpty ? nil : name)
+        }
+        let timestamp = head.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard timestamp.count == 2 else {
+            return legacyParseFolderName(name)
+        }
+        let dateParts = timestamp[0].split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        guard dateParts.count == 3,
+              let year = Int(dateParts[0]), let month = Int(dateParts[1]), let day = Int(dateParts[2]),
+              timestamp[1].count == 4, let hhmm = Int(timestamp[1]) else {
+            return legacyParseFolderName(name)
+        }
+
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hhmm / 100
+        components.minute = hhmm % 100
+        let date = Calendar(identifier: .gregorian).date(from: components)
+
+        var titleParts = headAndTitle.count > 1
+            ? headAndTitle[1].split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+            : []
+        if let last = titleParts.last, last.count <= 3, !last.isEmpty, last.allSatisfy(\.isNumber) {
+            titleParts.removeLast()
+        }
+        let title = titleParts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return (date, title.isEmpty ? nil : title)
+    }
+
+    private static func legacyParseFolderName(_ name: String) -> (Date?, String?) {
         let parts = name.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
         guard parts.count >= 4,
               let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
@@ -93,8 +136,6 @@ enum RecordingsLibrary {
         components.minute = hhmm % 100
         let date = Calendar(identifier: .gregorian).date(from: components)
 
-        // Title is everything after the date/time, minus a trailing numeric
-        // collision suffix (e.g. "-2") added when two recordings share a minute.
         var titleParts = Array(parts.dropFirst(4))
         if let last = titleParts.last, last.count <= 3, !last.isEmpty, last.allSatisfy(\.isNumber) {
             titleParts.removeLast()

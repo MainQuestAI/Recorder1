@@ -9,20 +9,14 @@ enum Preferences {
     private static let defaults = UserDefaults.standard
 
     private enum Key {
-        static let speakerName        = "localSpeakerName"
         static let silenceTimeout     = "silenceTimeoutSeconds"
         static let silenceThresholdDB = "silenceThresholdDB"
         static let silenceAutoStop    = "silenceAutoStopEnabled"
-        static let autoTranscribe     = "autoTranscribeAfterSave"
-        static let promptTemplate     = "geminiPromptTemplate"
-    }
-
-    /// Your name — used only as transcription context to label the local voice
-    /// (the microphone / right channel) when guessing who said what. Empty means
-    /// "don't name the local speaker". There is intentionally NO baked-in default.
-    static var speakerName: String {
-        get { defaults.string(forKey: Key.speakerName) ?? "" }
-        set { defaults.set(newValue, forKey: Key.speakerName) }
+        static let larkCLIPath        = "larkCLIBinaryPath"
+        static let autoUpload         = "autoUploadAfterSave"
+        static let fetchNotes         = "fetchNotesAfterUpload"
+        static let copyMinuteURL      = "copyMinuteURLAfterUpload"
+        static let openMinuteURL      = "openMinuteURLAfterUpload"
     }
 
     /// Seconds of two-channel silence before a recording auto-stops. Default 300 (5 min).
@@ -43,17 +37,33 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.silenceAutoStop) }
     }
 
-    /// Whether to transcribe automatically once a recording is saved. Default true.
-    static var autoTranscribe: Bool {
-        get { defaults.object(forKey: Key.autoTranscribe) == nil ? true : defaults.bool(forKey: Key.autoTranscribe) }
-        set { defaults.set(newValue, forKey: Key.autoTranscribe) }
+    /// Empty means auto-resolve: /opt/homebrew/bin/lark-cli first, then PATH.
+    static var larkCLIPath: String {
+        get { defaults.string(forKey: Key.larkCLIPath) ?? "" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Key.larkCLIPath) }
     }
 
-    /// User-customized Gemini transcription prompt. **Empty means "use the built-in
-    /// default"** — we store empty rather than a copy of the default so that future
-    /// improvements to the default prompt still reach users who never customized it.
-    static var promptTemplate: String {
-        get { defaults.string(forKey: Key.promptTemplate) ?? "" }
-        set { defaults.set(newValue, forKey: Key.promptTemplate) }
+    /// Whether to upload audio.m4a automatically once it is saved. Default true.
+    static var autoUploadAfterSave: Bool {
+        get { defaults.object(forKey: Key.autoUpload) == nil ? true : defaults.bool(forKey: Key.autoUpload) }
+        set { defaults.set(newValue, forKey: Key.autoUpload) }
+    }
+
+    /// Whether to call vc +notes after creating the minute. Default true.
+    static var fetchNotesAfterUpload: Bool {
+        get { defaults.object(forKey: Key.fetchNotes) == nil ? true : defaults.bool(forKey: Key.fetchNotes) }
+        set { defaults.set(newValue, forKey: Key.fetchNotes) }
+    }
+
+    /// Copy the minute URL to the clipboard after upload. Default false.
+    static var copyMinuteURLAfterUpload: Bool {
+        get { defaults.object(forKey: Key.copyMinuteURL) == nil ? false : defaults.bool(forKey: Key.copyMinuteURL) }
+        set { defaults.set(newValue, forKey: Key.copyMinuteURL) }
+    }
+
+    /// Open the minute URL after upload. Default false.
+    static var openMinuteURLAfterUpload: Bool {
+        get { defaults.object(forKey: Key.openMinuteURL) == nil ? false : defaults.bool(forKey: Key.openMinuteURL) }
+        set { defaults.set(newValue, forKey: Key.openMinuteURL) }
     }
 }

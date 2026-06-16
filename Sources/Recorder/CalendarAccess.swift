@@ -124,8 +124,8 @@ final class CalendarAccess {
 
     // MARK: - Helpers
 
-    /// Best-effort display names of the organizer + invitees, for transcription
-    /// context only. Falls back to the email local-part when a participant has no
+    /// Best-effort display names of the organizer + invitees, for recording
+    /// metadata. Falls back to the email local-part when a participant has no
     /// display name; dedups case-insensitively and caps the list.
     private func attendeeNames(_ ev: EKEvent) -> [String] {
         var names: [String] = []

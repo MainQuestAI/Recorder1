@@ -37,7 +37,7 @@ final class PreferencesWindowController: NSObject, NSWindowDelegate {
 
         let hosting = NSHostingController(rootView: PreferencesView().environment(model))
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Recorder Settings"
+        window.title = "Meeting Capture Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.delegate = self

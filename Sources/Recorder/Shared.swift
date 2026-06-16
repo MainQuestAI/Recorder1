@@ -9,14 +9,14 @@ enum RecorderState: Equatable {
     case paused
 }
 
-// MARK: - TranscriptionState
+// MARK: - UploadState
 
-/// Post-save transcription progress, surfaced in the panel.
-enum TranscriptionState: Equatable {
+/// Post-save Feishu upload progress, surfaced in the panel.
+enum UploadState: Equatable {
     case idle
     case running
-    /// Transcript written to disk at this URL.
-    case done(URL)
+    /// Feishu Minutes URL.
+    case uploaded(URL)
     /// Failed with a user-facing message.
     case failed(String)
 }
@@ -48,7 +48,7 @@ struct Meeting: Identifiable, Equatable {
     let start: Date
     let end: Date
     /// Display names of the organizer + invitees (best-effort; may be empty).
-    /// Used only as transcription context (improving speaker-identity guesses).
+    /// Stored in metadata so the recording keeps useful meeting context.
     let attendees: [String]
 
     init(id: String, title: String, start: Date, end: Date, attendees: [String] = []) {
@@ -112,7 +112,7 @@ struct Meeting: Identifiable, Equatable {
 // MARK: - RecordingSession
 
 struct RecordingSession {
-    /// ~/Documents/Recordings/{yyyy-M-d}-{HHmm}[-suffix]/
+    /// ~/Documents/MeetingCapture/{yyyy-MM-dd_HHmm}[-suffix]/
     let folderURL: URL
     /// folderURL + "desktop.caf"
     let desktopURL: URL
@@ -134,19 +134,19 @@ struct RecordingSession {
             create: true
         )
         let recordingsRoot = documents
-            .appendingPathComponent("Recordings", isDirectory: true)
+            .appendingPathComponent("MeetingCapture", isDirectory: true)
 
         let dateFmt = DateFormatter()
         dateFmt.locale = Locale(identifier: "en_US_POSIX")
         dateFmt.calendar = Calendar(identifier: .gregorian)
-        dateFmt.dateFormat = "yyyy-M-d"
+        dateFmt.dateFormat = "yyyy-MM-dd"
 
         let timeFmt = DateFormatter()
         timeFmt.locale = Locale(identifier: "en_US_POSIX")
         timeFmt.calendar = Calendar(identifier: .gregorian)
         timeFmt.dateFormat = "HHmm"
 
-        var folderName = "\(dateFmt.string(from: now))-\(timeFmt.string(from: now))"
+        var folderName = "\(dateFmt.string(from: now))_\(timeFmt.string(from: now))"
         if let title = meetingTitle {
             folderName += "-\(Meeting.sanitize(title))"
         }

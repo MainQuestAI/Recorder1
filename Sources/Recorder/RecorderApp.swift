@@ -5,8 +5,14 @@ struct RecorderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = RecorderModel()
 
+    init() {
+        if CommandLine.arguments.contains("--diagnose-system-audio") {
+            SystemAudioDiagnostics.runAndExit()
+        }
+    }
+
     var body: some Scene {
-        MenuBarExtra("Recorder", systemImage: menuBarSymbol) {
+        MenuBarExtra("Meeting Capture", systemImage: menuBarSymbol) {
             RecorderPanel()
                 .environment(model)
                 .task { model.onAppear() }
@@ -19,11 +25,16 @@ struct RecorderApp: App {
         // panel's "Settings…" button / ⌘,.
     }
 
-    /// Menu-bar glyph: a microphone at rest, the record dot while recording,
-    /// the pause glyph while paused.
+    /// Menu-bar glyph tracks capture and Feishu upload state.
     private var menuBarSymbol: String {
         switch model.state {
-        case .idle:      return "mic.fill"
+        case .idle:
+            switch model.uploadState {
+            case .idle: return "mic.fill"
+            case .running: return "arrow.up.circle.fill"
+            case .uploaded: return "checkmark.circle.fill"
+            case .failed: return "exclamationmark.triangle.fill"
+            }
         case .recording: return "record.circle.fill"
         case .paused:    return "pause.circle.fill"
         }

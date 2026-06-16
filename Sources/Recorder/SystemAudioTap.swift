@@ -295,26 +295,11 @@ final class SystemAudioTap {
     /// error is thrown.
     @discardableResult
     private func buildTapAndAggregateLocked() throws -> BuildResult {
-        // --- 1. Process tap: global stereo mix, passthrough, private. ---
-        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
-        desc.uuid = tapUUID
-        desc.muteBehavior = .unmuted   // passthrough: the user still hears their audio
-        desc.isPrivate = true          // do not advertise this tap system-wide
-
-        var newTapID = AudioObjectID(kAudioObjectUnknown)
-        let tapStatus = AudioHardwareCreateProcessTap(desc, &newTapID)
-        guard tapStatus == noErr, newTapID != kAudioObjectUnknown else {
-            throw TapError.createTapFailed(tapStatus)
-        }
-        self.tapID = newTapID
-
-        // --- 2. Default system output device + its UID (the aggregate's master clock). ---
+        // --- 1. Default system output device + its UID. ---
         let outputDevice: AudioObjectID
         do {
             outputDevice = try Self.defaultSystemOutputDevice()
         } catch {
-            AudioHardwareDestroyProcessTap(newTapID)
-            self.tapID = kAudioObjectUnknown
             throw error
         }
 
@@ -322,10 +307,25 @@ final class SystemAudioTap {
         do {
             outputUID = try Self.deviceUID(outputDevice)
         } catch {
-            AudioHardwareDestroyProcessTap(newTapID)
-            self.tapID = kAudioObjectUnknown
             throw error
         }
+
+        // --- 2. Process tap: current output device mix, passthrough, private. ---
+        let desc = CATapDescription(__excludingProcesses: [], andDeviceUID: outputUID, withStream: 0)
+        desc.uuid = tapUUID
+        desc.name = "Meeting Capture System Audio"
+        desc.muteBehavior = .unmuted   // passthrough: the user still hears their audio
+        desc.isPrivate = true          // do not advertise this tap system-wide
+        if #available(macOS 26.0, *) {
+            desc.isProcessRestoreEnabled = true
+        }
+
+        var newTapID = AudioObjectID(kAudioObjectUnknown)
+        let tapStatus = AudioHardwareCreateProcessTap(desc, &newTapID)
+        guard tapStatus == noErr, newTapID != kAudioObjectUnknown else {
+            throw TapError.createTapFailed(tapStatus)
+        }
+        self.tapID = newTapID
 
         // --- 3. Private, tap-only aggregate device. Output = master (drift comp off); tap in the
         //        tap-list with drift compensation on. The mic is NOT part of this aggregate. ---
@@ -346,7 +346,8 @@ final class SystemAudioTap {
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapUIDKey: tapUUID.uuidString,
-                    kAudioSubTapDriftCompensationKey: 1
+                    kAudioSubTapDriftCompensationKey: 1,
+                    kAudioSubTapDriftCompensationQualityKey: 0x60
                 ]
             ]
         ]
@@ -442,24 +443,27 @@ final class SystemAudioTap {
         let now = mach_absolute_time()
         lastCallbackHostTime.withLock { $0 = now }
 
-        // Wrap the incoming buffer list without copying. If the format is unexpected, bail.
-        guard let pcm = AVAudioPCMBuffer(
-            pcmFormat: tapFormat,
-            bufferListNoCopy: inputData,
-            deallocator: nil
-        ) else {
+        let channelCount = Int(tapFormat.channelCount)
+        guard channelCount > 0, tapFormat.commonFormat == .pcmFormatFloat32 else { return }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+        guard let firstBuffer = buffers.first,
+              let firstData = firstBuffer.mData?.assumingMemoryBound(to: Float.self) else {
             return
         }
 
-        let frameCount = pcm.frameLength
-        guard frameCount > 0, let channelData = pcm.floatChannelData else { return }
-
-        let channelCount = Int(tapFormat.channelCount)
+        let frameCount: Int
+        if tapFormat.isInterleaved {
+            frameCount = Int(firstBuffer.mDataByteSize) / (MemoryLayout<Float>.stride * channelCount)
+        } else {
+            frameCount = Int(firstBuffer.mDataByteSize) / MemoryLayout<Float>.stride
+        }
+        guard frameCount > 0 else { return }
         let n = vDSP_Length(frameCount)
 
         // --- Compute RMS for the meter + watchdog (mix of channel 0, cheap). ---
         var rms: Float = 0
-        vDSP_rmsqv(channelData[0], 1, &rms, n)
+        vDSP_rmsqv(firstData, vDSP_Stride(tapFormat.isInterleaved ? channelCount : 1), &rms, n)
         if rms > 0.000_03 { // ~ -90 dBFS; treat anything above as "loud" for the watchdog
             lastLoudHostTime.withLock { $0 = now }
         }
@@ -493,21 +497,35 @@ final class SystemAudioTap {
 
         if channelCount <= 1 {
             // Already mono: enqueue straight from the input buffer.
-            ring.write(channelData[0], count: Int(frameCount))
+            ring.write(firstData, count: frameCount)
         } else if let scratch = self.scratch {
             // Average all channels into mono, in scratch-sized chunks (IO buffers are tiny, so
-            // this loop runs once in practice).
-            let total = Int(frameCount)
+            // this loop runs once in practice). Taps often report interleaved stereo
+            // (L,R,L,R...), so handle both layouts explicitly.
+            let total = frameCount
             var offset = 0
             while offset < total {
                 let chunk = min(total - offset, scratchCapacity)
                 let cn = vDSP_Length(chunk)
-                memcpy(scratch, channelData[0] + offset, chunk * MemoryLayout<Float>.stride)
-                for ch in 1..<channelCount {
-                    vDSP_vadd(scratch, 1, channelData[ch] + offset, 1, scratch, 1, cn)
+                if tapFormat.isInterleaved {
+                    for frame in 0..<chunk {
+                        var sum: Float = 0
+                        let base = (offset + frame) * channelCount
+                        for ch in 0..<channelCount {
+                            sum += firstData[base + ch]
+                        }
+                        scratch[frame] = sum / Float(channelCount)
+                    }
+                } else {
+                    memcpy(scratch, firstData + offset, chunk * MemoryLayout<Float>.stride)
+                    let availableBuffers = min(channelCount, buffers.count)
+                    for ch in 1..<availableBuffers {
+                        guard let channel = buffers[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                        vDSP_vadd(scratch, 1, channel + offset, 1, scratch, 1, cn)
+                    }
+                    var scale = 1.0 / Float(channelCount)
+                    vDSP_vsmul(scratch, 1, &scale, scratch, 1, cn)
                 }
-                var scale = 1.0 / Float(channelCount)
-                vDSP_vsmul(scratch, 1, &scale, scratch, 1, cn)
                 ring.write(scratch, count: chunk)
                 offset += chunk
             }
