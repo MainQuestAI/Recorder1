@@ -1,4 +1,4 @@
-# Meeting Capture MVP Verification - 2026-06-16
+# Recorder1 MVP Verification - 2026-06-16
 
 ## Environment
 
@@ -9,17 +9,17 @@
   - `swift build` passed
   - `./build.sh` passed
 - App bundle:
-  - `MeetingCapture.app`
-  - `CFBundleIdentifier = com.dingcheng.MeetingCapture`
+  - `Recorder1.app`
+  - `CFBundleIdentifier = com.dingcheng.Recorder1`
   - `LSUIElement = true`
 - Signing:
   - `build.sh` now defaults to ad-hoc signing so unattended builds do not hang on Keychain prompts.
   - Stable signing is still supported through `CODESIGN_IDENTITY`; `CODESIGN_KEYCHAIN` can point to a specific keychain.
-  - The existing local certificate `Meeting Capture Local Code Signing` currently waits for Keychain/user trust confirmation when used unattended, so it is not used automatically.
+  - The installed acceptance build is signed with `Recorder1 Local Code Signing`.
   - Avoid `tccutil reset` during normal MVP verification; permission resets should only be used for first-run prompt tests.
 - Runtime:
-  - `MeetingCapture.app/Contents/MacOS/Recorder` launched and stayed running.
-  - TCC permission rows were later confirmed for `com.dingcheng.MeetingCapture`:
+  - `Recorder1.app/Contents/MacOS/Recorder` launched and stayed running.
+  - TCC permission rows were later confirmed for `com.dingcheng.Recorder1`:
     - `kTCCServiceCalendar = 2`
     - `kTCCServiceMicrophone = 2`
     - `kTCCServiceAudioCapture = 2`
@@ -36,7 +36,7 @@
   - macOS/Xcode/Swift tools are present.
   - macOS 26.5.1 satisfies `LSMinimumSystemVersion = 15.0`.
   - `swift build` passed.
-  - `./build.sh` produced `MeetingCapture.app`.
+  - `./build.sh` produced `Recorder1.app`.
   - `LSUIElement = true`, so the app is menu-bar-only.
   - Code signing verification passed.
   - Microphone, system audio capture, and calendar permissions are allowed.
@@ -69,7 +69,7 @@
 
 - The menu-bar status item was accessible through macOS accessibility automation.
 - A first automated Record click, performed before microphone permission was approved, produced a partial folder:
-  - `~/Documents/MeetingCapture/2026-06-16_2300/desktop.caf`
+  - `~/Documents/Recorder1/2026-06-16_2300/desktop.caf`
   - `metadata.json`
   - `upload.log`
 - That exposed a startup edge case: capture could fail after creating a recording folder, leaving metadata at `recording`.
@@ -79,7 +79,7 @@
 
 ## App Recording + Upload Probe
 
-- Local folder: `~/Documents/MeetingCapture/2026-06-16_2308`
+- Local folder: `~/Documents/Recorder1/2026-06-16_2308`
 - Files confirmed:
   - `desktop.caf`
   - `mic.caf`
@@ -113,7 +113,7 @@
 
 ## Local System Playback Probe
 
-- Local folder: `~/Documents/MeetingCapture/2026-06-16_2327`
+- Local folder: `~/Documents/Recorder1/2026-06-16_2327`
 - Test setup:
   - Auto upload was temporarily disabled for this local audio-only test.
   - Recording was started from the menu-bar app.
@@ -145,7 +145,7 @@
 - App-level diagnostic command:
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-output /tmp/meeting-capture-system-audio.json
+Recorder1.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-output /tmp/recorder1-system-audio.json
 ```
 
 - Result with the global Core Audio tap:
@@ -182,7 +182,7 @@ MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-ou
   - Core Audio callbacks are active and the tap writes frames.
   - The delivered samples are all zero, so the desktop/system channel is still blocked before real PCM reaches the app.
   - Current evidence points to macOS TCC/signing trust behavior on macOS 26, because ad-hoc or untrusted-signature Core Audio taps can be authorized in Settings while still receiving zero-filled buffers.
-  - ScreenCaptureKit fallback was not added because this machine has no screen-recording TCC grant for `com.dingcheng.MeetingCapture`, and adding it would trigger a new permission prompt.
+  - ScreenCaptureKit fallback was not added because this machine has no screen-recording TCC grant for `com.dingcheng.Recorder1`, and adding it would trigger a new permission prompt.
 
 ## Feishu CLI
 
@@ -213,7 +213,7 @@ Observed output shape:
   "ok": true,
   "identity": "user",
   "data": {
-    "file_name": "meeting-capture-stereo-65s-20260616.m4a",
+    "file_name": "recorder1-stereo-65s-20260616.m4a",
     "file_token": "Nx7jbm8Euohy2hxVkWCcJRdyn4f",
     "size": 913224,
     "url": "https://my.feishu.cn/file/Nx7jbm8Euohy2hxVkWCcJRdyn4f",
@@ -285,7 +285,7 @@ Observed ready output:
           "transcript_file": "minutes/obcn94fq3q44171159o7oe3m/transcript.txt"
         },
         "minute_token": "obcn94fq3q44171159o7oe3m",
-        "title": "meeting-capture-stereo-65s-20260616"
+        "title": "recorder1-stereo-65s-20260616"
       }
     ]
   },
@@ -299,7 +299,7 @@ Note: the CLI prints progress lines before the JSON.
 
 ## Verified Audio File
 
-- File: `meeting-capture-stereo-65s-20260616.m4a`
+- File: `recorder1-stereo-65s-20260616.m4a`
 - Format: AAC m4a
 - Channels: stereo
 - Duration: 65 seconds

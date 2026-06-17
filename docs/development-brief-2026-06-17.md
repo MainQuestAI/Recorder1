@@ -1,8 +1,8 @@
-# Meeting Capture 开发简报 - 2026-06-17
+# Recorder1 开发简报 - 2026-06-17
 
 ## 结论
 
-Meeting Capture 的 MVP 主链路已经完成：菜单栏应用可启动，Gemini 已移除，Feishu CLI 上传链路已接入并通过真实上传验证，MainQuest 黑色版菜单栏 UI 已完成。
+Recorder1 的 MVP 主链路已经完成：菜单栏应用可启动，Gemini 已移除，Feishu CLI 上传链路已接入并通过真实上传验证，MainQuest 黑色版菜单栏 UI 已完成。
 
 系统输出音频全 0 的根因已收窄并完成工程兜底：当前机器上 global tap / device-bound tap 会返回全 0，但同一签名 app 下的 process mixdown tap 可以拿到非零系统音频。生产录音现在按 `global -> device_bound -> process_mixdown` 自动降级，并且本地音频验收已证明 `desktop.caf` 和 `audio.m4a` 左声道都有系统输出音频。
 
@@ -65,7 +65,7 @@ Meeting Capture 的 MVP 主链路已经完成：菜单栏应用可启动，Gemin
 最终诊断命令：
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio-matrix --diagnose-output /tmp/meeting-capture-system-audio-matrix.json
+Recorder1.app/Contents/MacOS/Recorder --diagnose-system-audio-matrix --diagnose-output /tmp/recorder1-system-audio-matrix.json
 ```
 
 核心结果：
@@ -86,7 +86,7 @@ MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio-matrix --diag
 录音验收命令：
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder --diagnose-audio-capture-acceptance --diagnose-output /tmp/meeting-capture-audio-capture-acceptance.json
+Recorder1.app/Contents/MacOS/Recorder --diagnose-audio-capture-acceptance --diagnose-output /tmp/recorder1-audio-capture-acceptance.json
 ```
 
 验收结果：
