@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="ivory" x1="512" y1="248" x2="512" y2="806" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#F7F5F0"/>
+      <stop offset="1" stop-color="#E5E1D9"/>
+    </linearGradient>
+    <radialGradient id="red" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(488 468) rotate(55) scale(150)">
+      <stop offset="0" stop-color="#FF625E"/>
+      <stop offset="0.5" stop-color="#FF2228"/>
+      <stop offset="1" stop-color="#D70C15"/>
+    </radialGradient>
+    <filter id="iconShadow" x="10" y="18" width="1004" height="1006" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#000000" flood-opacity="0.52"/>
+    </filter>
+    <filter id="markShadow" x="150" y="210" width="755" height="620" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000000" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="-1.5" stdDeviation="1.4" flood-color="#FFFFFF" flood-opacity="0.22"/>
+    </filter>
+    <filter id="dotShadow" x="390" y="390" width="244" height="244" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="13" flood-color="#000000" flood-opacity="0.48"/>
+      <feDropShadow dx="0" dy="-2" stdDeviation="3" flood-color="#FF8B84" flood-opacity="0.42"/>
+    </filter>
+    <clipPath id="baseClip">
+      <rect x="68" y="68" width="888" height="888" rx="176"/>
+    </clipPath>
+  </defs>
+
+  <g filter="url(#iconShadow)">
+    <rect x="68" y="68" width="888" height="888" rx="176" fill="#171717"/>
+    <rect x="74" y="74" width="876" height="876" rx="170" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="12"/>
+  </g>
+
+  <g filter="url(#markShadow)">
+    <rect x="662" y="250" width="37" height="328" rx="18.5" fill="url(#ivory)"/>
+    <path d="M584 298L699 231V279L606 333C596 339 584 335 581 324L578 313C579 306 581 301 584 298Z"
+      fill="url(#ivory)"/>
+
+    <path d="M545 266A252 252 0 0 0 272 520A252 252 0 0 0 712 684"
+      stroke="url(#ivory)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="212" y="478" width="25" height="66" rx="12.5" fill="url(#ivory)"/>
+    <rect x="301" y="484" width="22" height="56" rx="11" fill="url(#ivory)"/>
+    <rect x="338" y="451" width="25" height="121" rx="12.5" fill="url(#ivory)"/>
+    <rect x="385" y="419" width="26" height="183" rx="13" fill="url(#ivory)"/>
+
+    <rect x="615" y="419" width="26" height="183" rx="13" fill="url(#ivory)"/>
+    <rect x="722" y="419" width="26" height="183" rx="13" fill="url(#ivory)"/>
+    <rect x="772" y="475" width="25" height="72" rx="12.5" fill="url(#ivory)"/>
+  </g>
+
+  <g filter="url(#dotShadow)">
+    <circle cx="512" cy="512" r="74" fill="url(#red)"/>
+    <circle cx="512" cy="512" r="74" stroke="#FF706A" stroke-opacity="0.38" stroke-width="4"/>
+    <circle cx="489" cy="470" r="18" fill="#FFFFFF" fill-opacity="0.11"/>
+  </g>
+</svg>

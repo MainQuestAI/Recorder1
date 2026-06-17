@@ -1,19 +1,33 @@
 #!/bin/bash
 set -e
 
-# Render the app icon and bundle it into Recorder.icns.
+# Render the Recorder1 SVG logo and bundle it into Recorder.icns.
 #
-# icon.swift draws a 1024x1024 master PNG (Recorder-1024.png) with pure AppKit /
-# Core Graphics — no design tools or external assets. This script then downscales
-# it to every size macOS wants and packs them into Recorder.icns via iconutil.
+# Recorder.icns is committed so regular builds do not need SVG tooling. Run this
+# script only when the source logo changes.
 
 cd "$(dirname "$0")"
 
+SOURCE="assets/recorder1-logo.svg"
 MASTER="Recorder-1024.png"
 SET="Recorder.iconset"
 
-echo "==> rendering $MASTER from icon.swift"
-swift icon.swift
+if [ ! -f "$SOURCE" ]; then
+    echo "missing $SOURCE" >&2
+    exit 1
+fi
+
+echo "==> rendering $MASTER from $SOURCE"
+if command -v rsvg-convert >/dev/null 2>&1; then
+    rsvg-convert -w 1024 -h 1024 "$SOURCE" -o "$MASTER"
+elif command -v magick >/dev/null 2>&1; then
+    magick "$SOURCE" -resize 1024x1024 "$MASTER"
+elif command -v convert >/dev/null 2>&1; then
+    convert "$SOURCE" -resize 1024x1024 "$MASTER"
+else
+    echo "install librsvg or ImageMagick to regenerate Recorder.icns" >&2
+    exit 1
+fi
 
 echo "==> building $SET"
 rm -rf "$SET"

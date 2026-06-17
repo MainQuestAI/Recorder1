@@ -36,7 +36,7 @@ mkdir -p "$RESOURCES"
 cp ".build/release/Recorder" "$MACOS/Recorder"
 cp "Info.plist" "$CONTENTS/Info.plist"
 
-# App icon (built from icon.swift via make-icon.sh). Optional: skip if absent.
+# App icon (built from assets/recorder1-logo.svg via make-icon.sh). Optional: skip if absent.
 if [ -f "Recorder.icns" ]; then
     cp "Recorder.icns" "$RESOURCES/Recorder.icns"
 else
