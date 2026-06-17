@@ -2,6 +2,16 @@
 
 Recorder1 is a native macOS menu-bar app for capturing meeting audio and sending the saved recording to Feishu Minutes through `lark-cli`.
 
+## 中文导览
+
+- 中文完整说明：[README.zh-CN.md](README.zh-CN.md)
+- 快速了解：Recorder1 是一个 macOS 菜单栏会议录音工具，录制系统声音和麦克风，并自动上传到飞书妙记。
+- 本地安装：查看 [Build](#build) 和 [Install Locally](#install-locally)。
+- 首次授权：查看 [First Run Permissions](#first-run-permissions)。
+- 飞书配置：查看 [Feishu CLI Flow](#feishu-cli-flow)。
+- 录音验收：查看 [Verification](#verification)。
+- 上游改造说明：查看 [docs/upstream-recorder-migration.md](docs/upstream-recorder-migration.md)。
+
 It records two sources at the same time:
 
 - **System audio -> left channel**: the remote participants, media playback, or meeting audio you hear.
