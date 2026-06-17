@@ -78,7 +78,7 @@ resolve_lark_cli() {
   return 1
 }
 
-printf 'Meeting Capture MVP self-check\n'
+printf 'Recorder1 MVP self-check\n'
 printf 'Root: %s\n' "$ROOT"
 
 need sw_vers
@@ -100,9 +100,9 @@ printf 'Xcode: %s\n' "$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]*$
 printf 'Swift: %s\n' "$(swift --version | head -n 1)"
 
 run_step "swift build" swift build
-run_step "bundle MeetingCapture.app" ./build.sh
+run_step "bundle Recorder1.app" ./build.sh
 
-APP="MeetingCapture.app"
+APP="Recorder1.app"
 APP_PLIST="$APP/Contents/Info.plist"
 
 if [[ -d "$APP" ]]; then

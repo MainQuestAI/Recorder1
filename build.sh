@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Build & bundle the Meeting Capture menu-bar app as a signed .app
+# Build & bundle the Recorder1 menu-bar app as a signed .app
 # Run from the repo root.
 #
 # Signing identity: set CODESIGN_IDENTITY to a certificate name (e.g.
@@ -16,7 +16,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-APP="MeetingCapture.app"
+APP="Recorder1.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"

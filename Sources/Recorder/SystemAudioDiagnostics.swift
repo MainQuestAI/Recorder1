@@ -117,7 +117,7 @@ enum SystemAudioDiagnostics {
         let say = Process()
         say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         say.arguments = [
-            "Meeting Capture system audio diagnostic. This sentence should be captured by the desktop channel."
+            "Recorder1 system audio diagnostic. This sentence should be captured by the desktop channel."
         ]
         try? say.run()
         Thread.sleep(forTimeInterval: 9.0)
@@ -171,7 +171,7 @@ enum SystemAudioDiagnostics {
         let say = Process()
         say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         say.arguments = [
-            "Meeting Capture acceptance recording. This sentence should appear on the desktop channel."
+            "Recorder1 acceptance recording. This sentence should appear on the desktop channel."
         ]
         try? say.run()
         Thread.sleep(forTimeInterval: 9.0)

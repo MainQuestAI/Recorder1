@@ -222,7 +222,7 @@ enum SystemAudioMatrixDiagnostics {
                 desc = CATapDescription(stereoMixdownOfProcesses: processes)
             }
             desc.uuid = tapUUID
-            desc.name = "Meeting Capture Matrix Probe"
+            desc.name = "Recorder1 Matrix Probe"
             desc.muteBehavior = .unmuted
             desc.isPrivate = config.tapPrivate
             if #available(macOS 26.0, *), let processRestoreEnabled = config.processRestoreEnabled {
@@ -243,7 +243,7 @@ enum SystemAudioMatrixDiagnostics {
             tapFormat = format
 
             var aggregate: [String: Any] = [
-                kAudioAggregateDeviceNameKey: "Meeting Capture Matrix Probe",
+                kAudioAggregateDeviceNameKey: "Recorder1 Matrix Probe",
                 kAudioAggregateDeviceUIDKey: UUID().uuidString,
                 kAudioAggregateDeviceMainSubDeviceKey: outputUID,
                 kAudioAggregateDeviceIsPrivateKey: true,
@@ -619,7 +619,7 @@ enum SystemAudioMatrixDiagnostics {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         process.arguments = [
-            "Meeting Capture system audio matrix probe. This sentence should be captured."
+            "Recorder1 system audio matrix probe. This sentence should be captured."
         ]
         try? process.run()
         return process

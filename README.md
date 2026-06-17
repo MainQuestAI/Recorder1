@@ -1,4 +1,4 @@
-# Meeting Capture
+# Recorder1
 
 macOS menu-bar recorder for capturing meeting audio and sending the saved recording to Feishu Minutes through `lark-cli`.
 
@@ -51,7 +51,7 @@ The app auto-detects `lark-cli` from `/opt/homebrew/bin/lark-cli`, common npm/gl
 
 ```bash
 ./build.sh
-open ./MeetingCapture.app
+open ./Recorder1.app
 ```
 
 The build script defaults to ad-hoc signing so unattended builds do not hang on Keychain prompts. For stable macOS permissions across rebuilds, sign with a trusted certificate:
@@ -102,7 +102,7 @@ The strict check requires both stereo channels to contain measurable audio. In t
 System-audio matrix diagnostic:
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder \
+Recorder1.app/Contents/MacOS/Recorder \
   --diagnose-system-audio-matrix \
   --diagnose-output /tmp/meeting-capture-system-audio-matrix.json
 ```

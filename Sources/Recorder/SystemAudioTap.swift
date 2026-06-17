@@ -364,7 +364,7 @@ final class SystemAudioTap {
             desc = CATapDescription(stereoMixdownOfProcesses: processes)
         }
         desc.uuid = tapUUID
-        desc.name = "Meeting Capture System Audio"
+        desc.name = "Recorder1 System Audio"
         desc.muteBehavior = .unmuted   // passthrough: the user still hears their audio
         desc.isPrivate = true          // do not advertise this tap system-wide
         if #available(macOS 26.0, *) {

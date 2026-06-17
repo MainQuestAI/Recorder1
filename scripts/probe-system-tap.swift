@@ -54,7 +54,7 @@ final class TapProbe {
         let say = Process()
         say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         say.arguments = [
-            "Meeting Capture Core Audio tap probe. This sentence should produce non zero system output samples."
+            "Recorder1 Core Audio tap probe. This sentence should produce non zero system output samples."
         ]
         try? say.run()
         Thread.sleep(forTimeInterval: duration)
@@ -86,7 +86,7 @@ final class TapProbe {
             desc = CATapDescription(__excludingProcesses: [], andDeviceUID: outputUID, withStream: 0)
         }
         desc.uuid = tapUUID
-        desc.name = "Meeting Capture Tap Probe"
+        desc.name = "Recorder1 Tap Probe"
         desc.muteBehavior = .unmuted
         desc.isPrivate = true
         if #available(macOS 26.0, *) {
@@ -104,7 +104,7 @@ final class TapProbe {
         tapFormat = format
 
         var aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Meeting Capture Tap Probe",
+            kAudioAggregateDeviceNameKey: "Recorder1 Tap Probe",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,

@@ -23,7 +23,7 @@ if [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
   exit 1
 fi
 
-APP="MeetingCapture.app"
+APP="Recorder1.app"
 REPORT="signing-report.txt"
 
 printf '==> building signed acceptance app\n'
@@ -34,7 +34,7 @@ else
 fi
 
 {
-  printf 'Meeting Capture signing report\n'
+  printf 'Recorder1 signing report\n'
   printf 'generated_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf 'codesign_identity=%s\n' "$CODESIGN_IDENTITY"
   if [[ -n "${CODESIGN_KEYCHAIN:-}" ]]; then

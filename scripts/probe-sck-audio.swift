@@ -96,7 +96,7 @@ struct SCKAudioProbe {
             let say = Process()
             say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
             say.arguments = [
-                "Meeting Capture Screen Capture Kit audio probe. This sentence should produce non zero system audio samples."
+                "Recorder1 Screen Capture Kit audio probe. This sentence should produce non zero system audio samples."
             ]
             try? say.run()
             try await Task.sleep(nanoseconds: 5_000_000_000)

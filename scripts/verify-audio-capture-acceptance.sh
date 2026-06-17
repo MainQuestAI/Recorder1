@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-APP="MeetingCapture.app"
+APP="Recorder1.app"
 BIN="$APP/Contents/MacOS/Recorder"
 MATRIX_JSON="/tmp/meeting-capture-system-audio-matrix.json"
 ACCEPTANCE_JSON="/tmp/meeting-capture-audio-capture-acceptance.json"

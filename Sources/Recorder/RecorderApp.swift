@@ -18,7 +18,7 @@ struct RecorderApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Meeting Capture", systemImage: menuBarSymbol) {
+        MenuBarExtra("Recorder1", systemImage: menuBarSymbol) {
             RecorderPanel()
                 .environment(model)
                 .task { model.onAppear() }

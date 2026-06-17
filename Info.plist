@@ -5,7 +5,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.dingcheng.MeetingCapture</string>
 	<key>CFBundleName</key>
-	<string>Meeting Capture</string>
+	<string>Recorder1</string>
+	<key>CFBundleDisplayName</key>
+	<string>Recorder1</string>
 	<key>CFBundleExecutable</key>
 	<string>Recorder</string>
 	<key>CFBundleIconFile</key>
@@ -21,10 +23,10 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Meeting Capture records your microphone so your voice is included in meeting audio.</string>
+	<string>Recorder1 records your microphone so your voice is included in meeting audio.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Meeting Capture records system audio so remote meeting participants are included.</string>
+	<string>Recorder1 records system audio so remote meeting participants are included.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Meeting Capture reads your calendar to name recordings after the meeting you are in.</string>
+	<string>Recorder1 reads your calendar to name recordings after the meeting you are in.</string>
 </dict>
 </plist>
