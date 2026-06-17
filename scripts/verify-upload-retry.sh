@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/meeting-capture-upload-retry.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/recorder1-upload-retry.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 PROBE_BIN="$WORK_DIR/upload-retry-probe"

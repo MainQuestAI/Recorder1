@@ -107,13 +107,13 @@ open ./Recorder1.app
 默认构建会使用 ad-hoc 签名，方便本地无人值守构建。正式验收建议使用稳定签名身份：
 
 ```bash
-CODESIGN_IDENTITY="Apple Development: you@example.com" ./build.sh
+CODESIGN_IDENTITY="Your Signing Identity" ./build.sh
 ```
 
 如果证书在独立钥匙串里：
 
 ```bash
-CODESIGN_IDENTITY="Developer ID Application: Example" \
+CODESIGN_IDENTITY="Your Signing Identity" \
 CODESIGN_KEYCHAIN="/path/to/signing.keychain-db" \
 ./build.sh
 ```
@@ -123,7 +123,7 @@ CODESIGN_KEYCHAIN="/path/to/signing.keychain-db" \
 严格系统音频验收构建：
 
 ```bash
-CODESIGN_IDENTITY="Apple Development: you@example.com" \
+CODESIGN_IDENTITY="Your Signing Identity" \
 bash scripts/build-for-audio-capture-acceptance.sh
 ```
 
@@ -315,9 +315,13 @@ metadata.json
 
 - 英文首页：[README.md](README.md)
 - 上游改造说明：[docs/upstream-recorder-migration.md](docs/upstream-recorder-migration.md)
-- 开发简报：[docs/development-brief-2026-06-17.md](docs/development-brief-2026-06-17.md)
+- 发布验收说明：[docs/release-validation.md](docs/release-validation.md)
 - 验证记录：[docs/verification-2026-06-16.md](docs/verification-2026-06-16.md)
-- 研究笔记：[docs/research-notes.md](docs/research-notes.md)
+- 开源 hardening 报告：[docs/open-source-hardening-report.md](docs/open-source-hardening-report.md)
+- 隐私说明：[PRIVACY.md](PRIVACY.md)
+- 安全策略：[SECURITY.md](SECURITY.md)
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 版权说明：[COPYRIGHT.md](COPYRIGHT.md)
 
 ## 隐私说明
 

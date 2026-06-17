@@ -6,8 +6,8 @@ cd "$ROOT"
 
 APP="Recorder1.app"
 BIN="$APP/Contents/MacOS/Recorder"
-MATRIX_JSON="/tmp/meeting-capture-system-audio-matrix.json"
-ACCEPTANCE_JSON="/tmp/meeting-capture-audio-capture-acceptance.json"
+MATRIX_JSON="/tmp/recorder1-system-audio-matrix.json"
+ACCEPTANCE_JSON="/tmp/recorder1-audio-capture-acceptance.json"
 
 fail() {
   printf 'FAIL %s\n' "$1" >&2

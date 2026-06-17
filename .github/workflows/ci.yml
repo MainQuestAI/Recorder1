@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Swift build
+        run: swift build
+
+      - name: Build app bundle
+        run: ./build.sh
+
+      - name: Verify app signature
+        run: codesign --verify --deep --strict Recorder1.app
+
+      - name: Verify upload retry with fake CLI
+        run: bash scripts/verify-upload-retry.sh
+
+      - name: Verify retention cleanup
+        run: bash scripts/verify-retention-cleanup.sh

@@ -1,238 +1,99 @@
-# Recorder1 MVP Verification - 2026-06-16
+# Recorder1 Public Verification Notes
 
-## Environment
+This document records public-safe verification coverage for Recorder1. It intentionally avoids real tenant domains, local user paths, real Feishu tokens, and private recording content.
 
-- macOS: 26.5.1
-- Xcode: 26.5
-- Swift: 6.3.2
-- Build commands:
-  - `swift build` passed
-  - `./build.sh` passed
-- App bundle:
-  - `Recorder1.app`
-  - `CFBundleIdentifier = com.dingcheng.Recorder1`
-  - `LSUIElement = true`
-- Signing:
-  - `build.sh` now defaults to ad-hoc signing so unattended builds do not hang on Keychain prompts.
-  - Stable signing is still supported through `CODESIGN_IDENTITY`; `CODESIGN_KEYCHAIN` can point to a specific keychain.
-  - The installed acceptance build is signed with `Recorder1 Local Code Signing`.
-  - Avoid `tccutil reset` during normal MVP verification; permission resets should only be used for first-run prompt tests.
-- Runtime:
-  - `Recorder1.app/Contents/MacOS/Recorder` launched and stayed running.
-  - TCC permission rows were later confirmed for `com.dingcheng.Recorder1`:
-    - `kTCCServiceCalendar = 2`
-    - `kTCCServiceMicrophone = 2`
-    - `kTCCServiceAudioCapture = 2`
+## Environment Class
 
-## MVP Self-Check
+Recorder1 is intended for:
 
-- Script: `scripts/verify-mvp.sh`
-- Stable command: `bash scripts/verify-mvp.sh`
-- Latest run result after the dark UI and device-bound Core Audio tap changes:
-  - 26 passed
-  - 3 warnings
-  - 0 failed
-- Covered checks:
-  - macOS/Xcode/Swift tools are present.
-  - macOS 26.5.1 satisfies `LSMinimumSystemVersion = 15.0`.
-  - `swift build` passed.
-  - `./build.sh` produced `Recorder1.app`.
-  - `LSUIElement = true`, so the app is menu-bar-only.
-  - Code signing verification passed.
-  - Microphone, system audio capture, and calendar permissions are allowed.
-  - Gemini remnants were not found.
-- `lark-cli` resolved from a local user install path.
-  - Required Feishu scopes are available.
-  - Failed upload preserves `audio.m4a`, writes `failed` metadata, and retry succeeds with the same relative `audio.m4a` path.
-  - Latest local recording folder has `metadata.json`, `upload.log`, and `audio.m4a`.
-  - Latest `audio.m4a` is playable stereo AAC and can be inspected for per-channel signal levels.
-  - New app builds include post-mix `audio_quality` metadata for new recordings.
+- macOS 15 or later,
+- Xcode / Swift toolchains that support Swift Package Manager,
+- a signed macOS app bundle for stable TCC permission behavior,
+- a user-installed and user-authenticated `lark-cli` for Feishu/Lark upload.
 
-## Dark UI Update
+Exact local machine details are omitted from the public repository because they are not required to reproduce the project.
 
-- `RecorderPanel.swift` was restyled using dark glass tokens:
-  - black page background `#030305`
-  - low-opacity elevated/surface fills
-  - subtle white borders
-  - white/gray typography
-  - green success, orange warning, blue info, red recording/destructive states
-- The menu-bar panel remains functionally unchanged:
-  - Record / Record Meeting
-  - Pause / Resume
-  - Stop
-  - Discard
-  - Upload status, Open Minute, Copy URL, Retry Upload
-  - Meetings, recent recordings, settings, recordings folder, quit
-- `swift build -c release` passed after the UI changes.
+## Build Verification
 
-## Menu-Bar UI Probe
-
-- The menu-bar status item was accessible through macOS accessibility automation.
-- A first automated Record click, performed before microphone permission was approved, produced a partial folder:
-  - `~/Documents/Recorder1/2026-06-16_2300/desktop.caf`
-  - `metadata.json`
-  - `upload.log`
-- That exposed a startup edge case: capture could fail after creating a recording folder, leaving metadata at `recording`.
-- The code was updated to wait for microphone permission before creating a recording session and to mark startup failures as `capture_failed` in `metadata.json` / `upload.log`.
-- Microphone permission is now requested only after the user clicks Record, and the app is activated before the request so the macOS prompt is visible.
-- A follow-up automated Record click after this fix did not create a new partial recording folder while microphone permission remained unapproved.
-
-## App Recording + Upload Probe
-
-- Local folder: `~/Documents/Recorder1/2026-06-16_2308`
-- Files confirmed:
-  - `desktop.caf`
-  - `mic.caf`
-  - `audio.m4a`
-  - `metadata.json`
-  - `upload.log`
-  - `feishu_minutes.json`
-  - `transcript.md`
-  - `minutes/<minute_token>/transcript.txt`
-- `audio.m4a` confirmed by `afinfo`:
-  - AAC m4a
-  - 2 channels
-  - 48 kHz
-  - estimated duration `4.574729` seconds
-- `audio.m4a` channel analysis:
-  - duration `4.575` seconds
-  - encoded channels `2`
-  - processing channels `2`
-  - left/desktop RMS `-120.0 dB`
-  - right/mic RMS `-31.7 dB`
-  - conclusion: this short probe proves playable stereo output and active microphone capture; it does not prove active system/remote audio capture because the desktop channel is silent.
-- Upload metadata:
-  - `upload_status = uploaded`
-  - `file_token = <redacted_file_token>`
-  - `minute_url = https://<tenant>.feishu.cn/minutes/<minute_token>`
-  - `minute_token = <redacted_minute_token>`
-- `vc +notes` behavior:
-  - attempt 1 returned `minute not ready , try later`
-  - attempt 2 returned `artifacts.transcript_file`
-  - `transcript.md` was written locally
-
-## Local System Playback Probe
-
-- Local folder: `~/Documents/Recorder1/2026-06-16_2327`
-- Test setup:
-  - Auto upload was temporarily disabled for this local audio-only test.
-  - Recording was started from the menu-bar app.
-  - macOS `say` played a short phrase through the default output device.
-  - Recording was stopped from the menu-bar app.
-  - Auto upload was restored to `true` afterward, and the app was relaunched from the latest build.
-- Files confirmed:
-  - `desktop.caf`
-  - `mic.caf`
-  - `audio.m4a`
-  - `metadata.json`
-  - `upload.log`
-- `audio.m4a` confirmed by `afinfo`:
-  - AAC m4a
-  - 2 channels
-  - 48 kHz
-  - estimated duration `109.380646` seconds
-- Strict channel analysis:
-  - left/desktop RMS `-117.0 dB`
-  - right/mic RMS `-28.6 dB`
-  - conclusion: microphone channel was active, but desktop/system channel remained effectively silent. This does not satisfy the remote/system audio requirement.
-- Follow-up code change:
-  - Added `AudioQualityAnalyzer.swift`.
-  - New recordings now write an `audio_quality` block to `metadata.json`.
-  - New recordings append audio-quality warnings to `upload.log` when desktop/system or microphone channels look silent.
-
-## System-Audio Zero-Buffer Diagnosis
-
-- App-level diagnostic command:
+Expected local commands:
 
 ```bash
-Recorder1.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-output /tmp/recorder1-system-audio.json
+swift build
+./build.sh
+codesign --verify --deep --strict Recorder1.app
 ```
 
-- Result with the global Core Audio tap:
+Expected result:
+
+- Swift package builds.
+- `Recorder1.app` is assembled.
+- `LSUIElement=true`, so the app runs as a menu-bar utility.
+- The app bundle passes code-signing verification.
+
+## Fake Upload Retry Verification
+
+Command:
+
+```bash
+bash scripts/verify-upload-retry.sh
+```
+
+Expected result:
+
+- A fake `lark-cli` is used.
+- The first upload can fail without deleting `audio.m4a`.
+- Retry upload reuses the existing `audio.m4a`.
+- `metadata.json` is updated with fake file and minute values.
+- `upload.log` records the failure and retry flow.
+
+Representative fake values:
 
 ```json
 {
-  "frameCount": 260096,
-  "ok": false,
-  "peakDB": -120,
-  "rmsDB": -120,
-  "sampleRate": 48000
+  "file_token": "fake-file-token",
+  "minute_url": "https://example.feishu.cn/minutes/fake-minute-token",
+  "minute_token": "fake-minute-token"
 }
 ```
 
-- Follow-up change:
-  - `SystemAudioTap.swift` now uses a device-bound tap for the current default system output device:
-    - `CATapDescription(__excludingProcesses: [], andDeviceUID: outputUID, withStream: 0)`
-  - On macOS 26, `isProcessRestoreEnabled` is enabled.
-  - Tap drift compensation quality is explicitly set on the aggregate tap list.
+These values are fixtures, not real tenant data.
 
-- Result after switching to the device-bound tap:
+## Retention Cleanup Verification
 
-```json
-{
-  "frameCount": 259584,
-  "ok": false,
-  "peakDB": -120,
-  "rmsDB": -120,
-  "sampleRate": 48000
-}
-```
-
-- Interpretation:
-  - Core Audio callbacks are active and the tap writes frames.
-  - The delivered samples are all zero, so the desktop/system channel is still blocked before real PCM reaches the app.
-  - Current evidence points to macOS TCC/signing trust behavior on macOS 26, because ad-hoc or untrusted-signature Core Audio taps can be authorized in Settings while still receiving zero-filled buffers.
-  - ScreenCaptureKit fallback was not added because this machine has no screen-recording TCC grant for `com.dingcheng.Recorder1`, and adding it would trigger a new permission prompt.
-
-## Feishu CLI
-
-- `lark-cli` version: 1.0.54
-- User identity: ready
-- Required scopes verified:
-  - `drive:file:upload`
-  - `minutes:minutes.upload:write`
-  - `vc:note:read`
-  - `minutes:minutes:readonly`
-  - `minutes:minutes.artifacts:read`
-  - `minutes:minutes.transcript:export`
-
-## Real Feishu API Results
-
-### drive +upload
-
-Command shape:
+Command:
 
 ```bash
-lark-cli drive +upload --as user --file <audio.m4a> --json
+bash scripts/verify-retention-cleanup.sh
 ```
 
-Observed output shape:
+Expected result:
+
+- Uploaded recordings older than the configured retention period are deleted.
+- Recordings without `upload_status=uploaded` are not deleted.
+- Recordings without `minute_url` are not deleted.
+- Keep-forever policy deletes nothing.
+
+## Feishu CLI Response Shape
+
+Recorder1 expects `lark-cli` to print JSON that contains these fields after any human-readable progress lines.
+
+Drive upload:
 
 ```json
 {
   "ok": true,
   "identity": "user",
   "data": {
-    "file_name": "recorder1-stereo-65s-20260616.m4a",
+    "file_name": "sample-audio.m4a",
     "file_token": "<file_token>",
-    "size": 913224,
-    "url": "https://my.feishu.cn/file/<file_token>",
+    "size": 123456,
+    "url": "https://example.feishu.cn/file/<file_token>",
     "version": "<version>"
   }
 }
 ```
 
-Note: the CLI prints a human-readable progress line before the JSON.
-
-### minutes +upload
-
-Command shape:
-
-```bash
-lark-cli minutes +upload --as user --file-token <file_token> --json
-```
-
-Observed output shape:
+Minutes upload:
 
 ```json
 {
@@ -244,15 +105,7 @@ Observed output shape:
 }
 ```
 
-### vc +notes
-
-Command shape:
-
-```bash
-lark-cli vc +notes --as user --minute-tokens <minute_token> --overwrite --json
-```
-
-Observed pending output:
+Notes pending:
 
 ```json
 {
@@ -272,7 +125,7 @@ Observed pending output:
 }
 ```
 
-Observed ready output:
+Notes ready:
 
 ```json
 {
@@ -285,7 +138,7 @@ Observed ready output:
           "transcript_file": "minutes/<minute_token>/transcript.txt"
         },
         "minute_token": "<minute_token>",
-        "title": "recorder1-stereo-65s-20260616"
+        "title": "sample-audio"
       }
     ]
   },
@@ -295,22 +148,54 @@ Observed ready output:
 }
 ```
 
-Note: the CLI prints progress lines before the JSON.
+## Audio Verification
 
-## Verified Audio File
+Latest recording analysis:
 
-- File: `recorder1-stereo-65s-20260616.m4a`
-- Format: AAC m4a
-- Channels: stereo
-- Duration: 65 seconds
-- Feishu Minutes accepted the file and reported duration `64993` ms.
+```bash
+bash scripts/analyze-latest-audio.sh 1
+```
 
-## Remaining Manual Verification
+Long recording analysis:
 
-- Confirm a real meeting recording includes both remote meeting audio and local microphone audio.
-  - Evidence command after each test: `bash scripts/analyze-latest-audio.sh 1`
-  - Expected result: both left/desktop and right/mic RMS are above the configured threshold.
-- Test Zoom, Feishu Meeting, Tencent Meeting, Teams, and Google Meet.
-- Test AirPods, wired headset, and speaker output routing.
-- Run a continuous 30-minute recording and play back `audio.m4a`.
-  - Evidence command: `bash scripts/analyze-latest-audio.sh 1800`
+```bash
+bash scripts/analyze-latest-audio.sh 1800
+```
+
+Expected result:
+
+- `audio.m4a` is stereo.
+- Left channel contains measurable system audio.
+- Right channel contains measurable microphone audio.
+- The script fails when a required channel is silent.
+
+## System Audio Diagnostic
+
+Command:
+
+```bash
+/Applications/Recorder1.app/Contents/MacOS/Recorder \
+  --diagnose-system-audio-matrix \
+  --diagnose-output /tmp/recorder1-system-audio-matrix.json
+```
+
+The diagnostic records:
+
+- tap kind,
+- output device role,
+- output device UID and name,
+- callback count,
+- frame count,
+- RMS and peak levels,
+- whether the probe was usable.
+
+The output file can contain local device names and should be reviewed before attaching it to public issues.
+
+## Manual Verification
+
+CI cannot grant TCC permissions or capture real system audio. Before production use, manually test:
+
+- a real meeting app,
+- Bluetooth output plus external microphone input,
+- speaker or wired output,
+- a 30-minute continuous recording.

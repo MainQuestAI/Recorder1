@@ -164,8 +164,8 @@ else
 fi
 
 printf '\n==> Gemini removal check\n'
-if rg -n "Gemini|GEMINI|diarization|GeminiTranscriber" Sources Info.plist Package.swift >/tmp/meeting-capture-gemini-rg.txt 2>/dev/null; then
-  cat /tmp/meeting-capture-gemini-rg.txt
+if rg -n "Gemini|GEMINI|diarization|GeminiTranscriber" Sources Info.plist Package.swift >/tmp/recorder1-gemini-rg.txt 2>/dev/null; then
+  cat /tmp/recorder1-gemini-rg.txt
   fail "Gemini remnants found"
 else
   pass "Gemini remnants not found"
@@ -177,10 +177,10 @@ if LARK_CLI="$(resolve_lark_cli)"; then
   "$LARK_CLI" --version || warn "could not print lark-cli version"
 
   REQUIRED_SCOPES="drive:file:upload minutes:minutes.upload:write vc:note:read minutes:minutes:readonly minutes:minutes.artifacts:read minutes:minutes.transcript:export"
-  if "$LARK_CLI" auth check --scope "$REQUIRED_SCOPES" --json >/tmp/meeting-capture-lark-auth.json; then
+  if "$LARK_CLI" auth check --scope "$REQUIRED_SCOPES" --json >/tmp/recorder1-lark-auth.json; then
     pass "required Feishu scopes are available"
   else
-    cat /tmp/meeting-capture-lark-auth.json 2>/dev/null || true
+    cat /tmp/recorder1-lark-auth.json 2>/dev/null || true
     fail "required Feishu scopes are missing or lark-cli is not logged in"
   fi
 else

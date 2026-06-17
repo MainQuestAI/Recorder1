@@ -4,15 +4,14 @@ set -e
 # Build & bundle the Recorder1 menu-bar app as a signed .app
 # Run from the repo root.
 #
-# Signing identity: set CODESIGN_IDENTITY to a certificate name (e.g.
-# "Apple Development: you@example.com" or a "Developer ID Application: …") to
+# Signing identity: set CODESIGN_IDENTITY to a certificate name to
 # sign with a stable identity — this keeps the app's Microphone / Audio-capture /
 # Calendar TCC grants sticky across rebuilds. Defaults to "-" (ad-hoc), which
 # works for unattended local builds. A local self-signed certificate can still
 # trigger Keychain confirmation when the Mac is locked or the certificate is not
 # trusted, so we only use it when explicitly requested.
-#   CODESIGN_IDENTITY="Apple Development: you@example.com" ./build.sh
-#   CODESIGN_IDENTITY="Developer ID Application: Example" CODESIGN_KEYCHAIN="/path/to.keychain-db" ./build.sh
+#   CODESIGN_IDENTITY="Your Signing Identity" ./build.sh
+#   CODESIGN_IDENTITY="Your Signing Identity" CODESIGN_KEYCHAIN="/path/to.keychain-db" ./build.sh
 
 cd "$(dirname "$0")"
 

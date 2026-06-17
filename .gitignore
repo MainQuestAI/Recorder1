@@ -20,7 +20,24 @@ xcuserdata/
 Recordings/
 *.caf
 *.m4a
+feishu_minutes.json
+upload.log
+metadata.json
+transcript.md
+summary.md
+minutes/
+
+# Local diagnostics and acceptance artifacts
+*matrix*.json
+*acceptance*.json
 signing-report.txt
+
+# Signing material
+*.p12
+*.cer
+*.mobileprovision
+*.keychain
+*.keychain-db
 
 # Icon build scratch (icon.swift + Recorder.icns are committed; these are regenerable)
 icon-work/

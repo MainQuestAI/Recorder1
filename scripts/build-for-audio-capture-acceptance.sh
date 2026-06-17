@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'usage: CODESIGN_IDENTITY="Apple Development: ..." %s [--diagnose-system-audio-matrix]\n' "$0" >&2
+      printf 'usage: CODESIGN_IDENTITY="Your Signing Identity" %s [--diagnose-system-audio-matrix]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -62,7 +62,7 @@ fi
 printf 'PASS signing report written: %s\n' "$REPORT"
 
 if [[ "$RUN_MATRIX" == true ]]; then
-  MATRIX_JSON="/tmp/meeting-capture-system-audio-matrix.json"
+  MATRIX_JSON="/tmp/recorder1-system-audio-matrix.json"
   printf '==> running system audio matrix\n'
   "$APP/Contents/MacOS/Recorder" \
     --diagnose-system-audio-matrix \

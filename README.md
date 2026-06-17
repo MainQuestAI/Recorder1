@@ -106,13 +106,13 @@ The build script defaults to ad-hoc signing so unattended local builds do not ha
 For stable macOS permissions across rebuilds, sign with a trusted certificate:
 
 ```bash
-CODESIGN_IDENTITY="Apple Development: you@example.com" ./build.sh
+CODESIGN_IDENTITY="Your Signing Identity" ./build.sh
 ```
 
 If the certificate lives outside the login keychain, pass it explicitly:
 
 ```bash
-CODESIGN_IDENTITY="Developer ID Application: Example" \
+CODESIGN_IDENTITY="Your Signing Identity" \
 CODESIGN_KEYCHAIN="/path/to/signing.keychain-db" \
 ./build.sh
 ```
@@ -122,7 +122,7 @@ Stable signing matters because macOS ties microphone, system-audio capture, cale
 For strict system-audio acceptance builds, use:
 
 ```bash
-CODESIGN_IDENTITY="Apple Development: you@example.com" \
+CODESIGN_IDENTITY="Your Signing Identity" \
 bash scripts/build-for-audio-capture-acceptance.sh
 ```
 
@@ -313,9 +313,13 @@ Then use Retry Upload from the menu-bar panel after fixing `lark-cli` login, pat
 ## Documentation
 
 - [Upstream Recorder to Recorder1 migration](docs/upstream-recorder-migration.md)
-- [Development brief](docs/development-brief-2026-06-17.md)
+- [Release validation notes](docs/release-validation.md)
 - [Verification notes](docs/verification-2026-06-16.md)
-- [Research notes](docs/research-notes.md)
+- [Open source hardening report](docs/open-source-hardening-report.md)
+- [Privacy policy](PRIVACY.md)
+- [Security policy](SECURITY.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Copyright](COPYRIGHT.md)
 
 ## Privacy Notes
 

@@ -42,7 +42,7 @@ struct UploadRetryProbe {
         try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
 
         let audioURL = folderURL.appendingPathComponent("audio.m4a")
-        let originalAudio = Data("meeting-capture-upload-retry-probe".utf8)
+        let originalAudio = Data("recorder1-upload-retry-probe".utf8)
         try originalAudio.write(to: audioURL, options: .atomic)
 
         let startedAt = Date(timeIntervalSince1970: 1_781_622_000)

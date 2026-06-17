@@ -26,4 +26,5 @@ Recorder1 keeps the upstream macOS menu-bar recording foundation and adds a Feis
 
 ## Recorder1 Contributions
 
-Recorder1-specific changes are released under the same MIT License unless a file states otherwise.
+- Recorder1 modifications copyright holder: Copyright (c) 2026 Dingcheng and Recorder1 contributors.
+- Recorder1-specific changes are released under the same MIT License unless a file states otherwise.
