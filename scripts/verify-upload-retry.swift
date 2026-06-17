@@ -45,16 +45,28 @@ struct UploadRetryProbe {
         let originalAudio = Data("recorder1-upload-retry-probe".utf8)
         try originalAudio.write(to: audioURL, options: .atomic)
 
-        let startedAt = Date(timeIntervalSince1970: 1_781_622_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let startedAt = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 6,
+            day: 17,
+            hour: 15,
+            minute: 0
+        ))!
         let endedAt = startedAt.addingTimeInterval(60)
         let job = FeishuUploadJob(
             audioURL: audioURL,
             folderURL: folderURL,
             meetingTitle: "Retry Upload Probe",
+            titleSource: .manual,
+            calendarEventTitle: nil,
             attendees: ["Local Tester"],
             startedAt: startedAt,
             endedAt: endedAt
         )
+        let expectedUploadFileName = "2026-06-17_1500-Retry-Upload-Probe.m4a"
+        try require(job.uploadFileName == expectedUploadFileName, "unexpected upload file name: \(job.uploadFileName)")
         UploadStatusStore.markSaved(job: job)
 
         try "1".write(
@@ -81,6 +93,8 @@ struct UploadRetryProbe {
         }
         try require(failedMetadata.uploadStatus == "failed", "metadata status after failure was \(failedMetadata.uploadStatus)")
         try require(failedMetadata.audioPath == audioURL.path, "metadata audio_path did not preserve audio.m4a")
+        try require(failedMetadata.titleSource == "manual", "metadata title_source missing after failure")
+        try require(failedMetadata.uploadFileName == expectedUploadFileName, "metadata upload_file_name missing after failure")
 
         let logURL = folderURL.appendingPathComponent("upload.log")
         try requireFile(logURL, "upload.log missing after failed upload")
@@ -103,6 +117,8 @@ struct UploadRetryProbe {
         try require(uploadedMetadata.uploadStatus == "uploaded", "metadata status after retry was \(uploadedMetadata.uploadStatus)")
         try require(uploadedMetadata.fileToken == "fake-file-token", "metadata file_token missing after retry")
         try require(uploadedMetadata.minuteToken == "fake-minute-token", "metadata minute_token missing after retry")
+        try require(uploadedMetadata.titleSource == "manual", "metadata title_source missing after retry")
+        try require(uploadedMetadata.uploadFileName == expectedUploadFileName, "metadata upload_file_name missing after retry")
         try require(
             uploadedMetadata.minuteURL == "https://example.feishu.cn/minutes/fake-minute-token",
             "metadata minute_url missing after retry"
@@ -115,7 +131,7 @@ struct UploadRetryProbe {
             contentsOf: folderURL.appendingPathComponent("fake-lark-invocations.log"),
             encoding: .utf8
         )
-        let expectedUploadArg = "--file \(job.uploadFileName)"
+        let expectedUploadArg = "--file \(expectedUploadFileName)"
         let driveCalls = invocations
             .split(separator: "\n")
             .filter { $0.contains("drive +upload") && $0.contains(expectedUploadArg) }

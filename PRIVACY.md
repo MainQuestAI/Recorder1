@@ -63,6 +63,7 @@ These files can contain sensitive meeting information:
 They may include:
 
 - meeting titles,
+- recording title source, calendar event title, and upload file name,
 - local file paths,
 - selected microphone and audio route metadata,
 - Feishu file tokens,

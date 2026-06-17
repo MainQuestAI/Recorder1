@@ -37,7 +37,7 @@ See [docs/upstream-recorder-migration.md](docs/upstream-recorder-migration.md) f
 - Simultaneous system audio and microphone capture.
 - Stereo output where left is system audio and right is microphone audio.
 - Optional microphone device selection for external USB/Bluetooth mics.
-- Calendar-aware meeting list and meeting-based folder names.
+- Calendar-aware meeting list, editable recording title, and meeting-based folder names.
 - Feishu upload flow:
   - `lark-cli drive +upload`
   - `lark-cli minutes +upload`
@@ -75,7 +75,7 @@ File roles:
 | `mic.caf` | Raw mono microphone audio, flushed during recording. |
 | `audio.m4a` | Final stereo AAC mix. Left = system audio, right = microphone. |
 | `{YYYY-MM-DD_HHmm}-{meeting-title}.m4a` | Upload copy used so Feishu Drive and Feishu Minutes show a useful meeting name. |
-| `metadata.json` | Meeting metadata, local paths, upload status, Feishu tokens, audio quality, capture integrity, and selected microphone device. |
+| `metadata.json` | Recording title, title source, calendar event title, upload file name, local paths, upload status, Feishu tokens, audio quality, capture integrity, and selected microphone device. |
 | `upload.log` | Local upload and capture log. |
 | `feishu_minutes.json` | Combined Feishu Drive, Minutes, and notes API output. |
 | `transcript.md` | Transcript content when Feishu returns it. |

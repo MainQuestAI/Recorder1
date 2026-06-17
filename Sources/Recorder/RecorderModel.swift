@@ -14,6 +14,8 @@ final class RecorderModel {
     var desktopLevel: Float = 0      // 0..1 meter (LEFT / desktop)
     var micLevel: Float = 0          // 0..1 meter (RIGHT / mic)
     var meetings: [Meeting] = []
+    var detectedMeeting: Meeting? = nil
+    var recordingTitleDraft: RecordingTitleDraft = .empty
     var currentSession: RecordingSession? = nil
     var elapsed: TimeInterval = 0
     var statusMessage: String? = nil
@@ -174,8 +176,18 @@ final class RecorderModel {
 
     // MARK: - Recording control
 
+    private struct ResolvedRecordingTitle {
+        var title: String
+        var source: RecordingTitleSource
+        var linkedMeeting: Meeting?
+        var calendarEventTitle: String?
+    }
+
     func startRecording(meeting: Meeting?, matchCurrentMeeting: Bool = true) {
         guard state == .idle, !preparingToRecord else { return }
+        if let meeting {
+            useMeetingForRecordingTitle(meeting)
+        }
         preparingToRecord = true
         statusMessage = text("status.checkingMic")
         NSApp.activate(ignoringOtherApps: true)
@@ -190,28 +202,42 @@ final class RecorderModel {
             }
             self.refreshInputDevices()
             self.preparingToRecord = false
-            let resolvedMeeting = meeting ?? (matchCurrentMeeting ? self.calendar.currentMeeting(Date()) : nil)
-            if resolvedMeeting != nil {
-                self.refreshMeetings()
-            }
-            self.beginRecording(meeting: resolvedMeeting)
+            let resolvedTitle = self.resolveRecordingTitleForStart(matchCurrentMeeting: matchCurrentMeeting && meeting == nil)
+            self.beginRecording(titleContext: resolvedTitle)
         }
     }
 
-    private func beginRecording(meeting: Meeting?) {
+    func startRecordingWithoutMeeting() {
+        guard state == .idle else { return }
+        let manualTitle = recordingTitleDraft.userEdited ? recordingTitleDraft.title : ""
+        recordingTitleDraft = RecordingTitleDraft(
+            title: manualTitle,
+            source: manualTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .fallback : .manual,
+            linkedMeeting: nil,
+            userEdited: recordingTitleDraft.userEdited
+        )
+        startRecording(meeting: nil, matchCurrentMeeting: false)
+    }
+
+    private func beginRecording(titleContext: ResolvedRecordingTitle) {
         guard state == .idle else { return }
 
         let now = Date()
         let session: RecordingSession
         do {
-            session = try RecordingSession.create(now: now, meetingTitle: meeting?.title)
+            session = try RecordingSession.create(
+                now: now,
+                meetingTitle: titleContext.title,
+                titleSource: titleContext.source,
+                calendarEventTitle: titleContext.calendarEventTitle
+            )
         } catch {
             statusMessage = text("status.createFolderFailed", error.localizedDescription)
             return
         }
         currentSession = session
-        activeMeeting = meeting
-        UploadStatusStore.writeInitial(session: session, meeting: meeting)
+        activeMeeting = titleContext.linkedMeeting
+        UploadStatusStore.writeInitial(session: session, meeting: titleContext.linkedMeeting)
 
         // Clear any previous recording's upload UI.
         uploadState = .idle
@@ -261,7 +287,7 @@ final class RecorderModel {
             statusMessage = text("status.captureStartFailed", describeCaptureError(error))
             _ = tap.stop()
             _ = mic.stop()
-            UploadStatusStore.markCaptureFailed(session: session, meeting: meeting, error: error)
+            UploadStatusStore.markCaptureFailed(session: session, meeting: titleContext.linkedMeeting, error: error)
             currentSession = nil
             activeMeeting = nil
             silenceMonitor = nil
@@ -272,7 +298,7 @@ final class RecorderModel {
         silenceMonitor?.start()
 
         // Schedule a meeting-end alert when recording a known meeting.
-        if let meeting {
+        if let meeting = titleContext.linkedMeeting {
             notifications.scheduleMeetingEndAlert(at: meeting.end, meetingTitle: meeting.title, language: language)
         }
 
@@ -318,7 +344,7 @@ final class RecorderModel {
         let folderURL = session.folderURL
         let startedAt = session.startedAt
         let endedAt = Date()
-        let meetingTitle = activeMeeting?.title ?? session.meetingTitle
+        let meetingTitle = session.meetingTitle ?? activeMeeting?.title
         let attendees = activeMeeting?.attendees ?? []
         Task.detached(priority: .utility) {
             do {
@@ -336,6 +362,8 @@ final class RecorderModel {
                         audioURL: outputURL,
                         folderURL: folderURL,
                         meetingTitle: meetingTitle,
+                        titleSource: session.titleSource,
+                        calendarEventTitle: session.calendarEventTitle,
                         attendees: attendees,
                         startedAt: startedAt,
                         endedAt: endedAt
@@ -403,15 +431,82 @@ final class RecorderModel {
     func refreshMeetings() {
         let now = Date()
         meetings = calendar.meetingsAroundNow(now)
+        detectedMeeting = calendar.currentMeeting(now)
+        syncRecordingTitleWithDetectedMeeting()
     }
 
-    /// The meeting currently in progress, if any. All-day events are already
-    /// excluded from `meetings`, so this only matches timed meetings. Used as the
-    /// default target for the main Record button so recording while you're in a
-    /// meeting auto-tags it (folder name + end alert + metadata context).
+    /// Best detected meeting for the main Record button. CalendarAccess prefers
+    /// an in-progress event, then the most recent started event, then the next one.
     var currentMeeting: Meeting? {
-        let now = Date()
-        return meetings.first(where: { $0.isInProgress(now) })
+        detectedMeeting
+    }
+
+    var recordingTitleSourceLabel: String? {
+        switch recordingTitleDraft.source {
+        case .calendar:
+            return recordingTitleDraft.linkedMeeting == nil ? nil : text("title.source.calendar")
+        case .manual:
+            return recordingTitleDraft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : text("title.source.manual")
+        case .fallback:
+            return nil
+        }
+    }
+
+    func updateRecordingTitle(_ title: String) {
+        recordingTitleDraft.title = title
+        recordingTitleDraft.source = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? .fallback
+            : .manual
+        recordingTitleDraft.userEdited = true
+    }
+
+    func useMeetingForRecordingTitle(_ meeting: Meeting) {
+        recordingTitleDraft = RecordingTitleDraft(
+            title: meeting.title,
+            source: .calendar,
+            linkedMeeting: meeting,
+            userEdited: false
+        )
+        detectedMeeting = meeting
+    }
+
+    private func syncRecordingTitleWithDetectedMeeting() {
+        guard state == .idle, !recordingTitleDraft.userEdited else { return }
+        if let detectedMeeting {
+            useMeetingForRecordingTitle(detectedMeeting)
+        } else if recordingTitleDraft.source == .calendar {
+            recordingTitleDraft = .empty
+        }
+    }
+
+    private func resolveRecordingTitleForStart(matchCurrentMeeting: Bool) -> ResolvedRecordingTitle {
+        if matchCurrentMeeting {
+            let current = calendar.currentMeeting(Date())
+            detectedMeeting = current
+            if let current {
+                if recordingTitleDraft.userEdited {
+                    if recordingTitleDraft.linkedMeeting == nil {
+                        recordingTitleDraft.linkedMeeting = current
+                    }
+                } else {
+                    useMeetingForRecordingTitle(current)
+                }
+            }
+        }
+
+        let trimmedTitle = recordingTitleDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalTitle = trimmedTitle.isEmpty ? "Recorder1" : trimmedTitle
+        let source: RecordingTitleSource = trimmedTitle.isEmpty ? .fallback : recordingTitleDraft.source
+        let linkedMeeting = recordingTitleDraft.linkedMeeting
+
+        return ResolvedRecordingTitle(
+            title: finalTitle,
+            source: source,
+            linkedMeeting: linkedMeeting,
+            calendarEventTitle: linkedMeeting?.title
+        )
     }
 
     func quit() {
@@ -528,6 +623,8 @@ final class RecorderModel {
             audioURL: audio,
             folderURL: entry.folderURL,
             meetingTitle: metadata?.meetingTitle ?? entry.title,
+            titleSource: metadata?.titleSource.flatMap(RecordingTitleSource.init(rawValue:)),
+            calendarEventTitle: metadata?.calendarEventTitle,
             attendees: metadata?.attendees ?? [],
             startedAt: metadata?.startedAt ?? entry.date,
             endedAt: metadata?.endedAt ?? Date()

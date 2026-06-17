@@ -286,13 +286,13 @@ struct RecorderPanel: View {
     private var controls: some View {
         switch model.state {
         case .idle:
-            if let current = model.currentMeeting {
-                // In a meeting: the primary button auto-tags it; the small
-                // secondary button records without attaching to any meeting.
-                MQCard(spacing: 8) {
+            MQCard(spacing: 9) {
+                recordingTitleEditor
+
+                if model.currentMeeting != nil {
                     HStack(spacing: 8) {
                         Button {
-                            model.startRecording(meeting: current)
+                            model.startRecording(meeting: nil)
                         } label: {
                             Label(model.text("action.recordMeeting"), systemImage: "record.circle.fill")
                                 .frame(maxWidth: .infinity)
@@ -302,7 +302,7 @@ struct RecorderPanel: View {
                         .keyboardShortcut("r", modifiers: [.command])
 
                         Button {
-                            model.startRecording(meeting: nil, matchCurrentMeeting: false)
+                            model.startRecordingWithoutMeeting()
                         } label: {
                             Image(systemName: "record.circle")
                                 .frame(width: 22, height: 20)
@@ -311,15 +311,7 @@ struct RecorderPanel: View {
                         .buttonStyle(MQButtonStyle(kind: .icon))
                         .help(model.text("action.recordNoMeeting"))
                     }
-                    Text(model.text("text.tagRecording", current.title))
-                        .font(.caption2)
-                        .foregroundStyle(MQTheme.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            } else {
-                // No meeting in progress: a single, plain Record button.
-                MQCard {
+                } else {
                     Button {
                         model.startRecording(meeting: nil)
                     } label: {
@@ -370,6 +362,52 @@ struct RecorderPanel: View {
                     .help(model.text("help.discard"))
                 }
             }
+        }
+    }
+
+    private var recordingTitleEditor: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(model.text("field.recordingTitle"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(MQTheme.textSecondary)
+
+                if let source = model.recordingTitleSourceLabel {
+                    Text(source)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(MQTheme.success)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(MQTheme.success.opacity(0.12))
+                                .overlay(Capsule().stroke(MQTheme.success.opacity(0.28), lineWidth: 1))
+                        )
+                }
+
+                Spacer()
+            }
+
+            TextField(
+                model.text("field.recordingTitlePrompt"),
+                text: Binding(
+                    get: { model.recordingTitleDraft.title },
+                    set: { model.updateRecordingTitle($0) }
+                )
+            )
+            .textFieldStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(MQTheme.textPrimary)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(MQTheme.border, lineWidth: 1)
+                    )
+            )
         }
     }
 

@@ -4,9 +4,31 @@ struct FeishuUploadJob: Equatable {
     let audioURL: URL
     let folderURL: URL
     let meetingTitle: String?
+    let titleSource: RecordingTitleSource?
+    let calendarEventTitle: String?
     let attendees: [String]
     let startedAt: Date
     let endedAt: Date
+
+    init(
+        audioURL: URL,
+        folderURL: URL,
+        meetingTitle: String?,
+        titleSource: RecordingTitleSource? = nil,
+        calendarEventTitle: String? = nil,
+        attendees: [String],
+        startedAt: Date,
+        endedAt: Date
+    ) {
+        self.audioURL = audioURL
+        self.folderURL = folderURL
+        self.meetingTitle = meetingTitle
+        self.titleSource = titleSource
+        self.calendarEventTitle = calendarEventTitle
+        self.attendees = attendees
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
 
     var audioRelativePath: String {
         uploadFileName

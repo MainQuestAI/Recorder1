@@ -141,6 +141,28 @@ struct Meeting: Identifiable, Equatable {
 
 // MARK: - RecordingSession
 
+enum RecordingTitleSource: String, Codable, Equatable {
+    case calendar
+    case manual
+    case fallback
+}
+
+struct RecordingTitleDraft: Equatable {
+    var title: String
+    var source: RecordingTitleSource
+    var linkedMeeting: Meeting?
+    var userEdited: Bool
+
+    static var empty: RecordingTitleDraft {
+        RecordingTitleDraft(
+            title: "",
+            source: .fallback,
+            linkedMeeting: nil,
+            userEdited: false
+        )
+    }
+}
+
 struct RecordingSession {
     /// ~/Documents/Recorder1/{yyyy-MM-dd_HHmm}[-suffix]/
     let folderURL: URL
@@ -152,9 +174,16 @@ struct RecordingSession {
     let outputURL: URL
     let startedAt: Date
     let meetingTitle: String?
+    let titleSource: RecordingTitleSource
+    let calendarEventTitle: String?
 
     /// Creates the dated folder and returns the session. Throws on filesystem error.
-    static func create(now: Date, meetingTitle: String?) throws -> RecordingSession {
+    static func create(
+        now: Date,
+        meetingTitle: String?,
+        titleSource: RecordingTitleSource = .fallback,
+        calendarEventTitle: String? = nil
+    ) throws -> RecordingSession {
         let fm = FileManager.default
 
         let recordingsRoot = try RecorderPaths.recordingsRoot(create: true)
@@ -195,7 +224,9 @@ struct RecordingSession {
             micURL: folderURL.appendingPathComponent("mic.caf"),
             outputURL: folderURL.appendingPathComponent("audio.m4a"),
             startedAt: now,
-            meetingTitle: meetingTitle
+            meetingTitle: meetingTitle,
+            titleSource: titleSource,
+            calendarEventTitle: calendarEventTitle
         )
     }
 }

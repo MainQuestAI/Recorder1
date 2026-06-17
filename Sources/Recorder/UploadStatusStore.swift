@@ -2,6 +2,8 @@ import Foundation
 
 struct RecordingMetadata: Codable, Equatable {
     var meetingTitle: String?
+    var titleSource: String?
+    var calendarEventTitle: String?
     var attendees: [String]
     var startedAt: Date?
     var endedAt: Date?
@@ -9,6 +11,7 @@ struct RecordingMetadata: Codable, Equatable {
     var desktopPath: String
     var micPath: String
     var audioPath: String
+    var uploadFileName: String?
     var fileToken: String?
     var minuteURL: String?
     var minuteToken: String?
@@ -22,6 +25,8 @@ struct RecordingMetadata: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case meetingTitle = "meeting_title"
+        case titleSource = "title_source"
+        case calendarEventTitle = "calendar_event_title"
         case attendees
         case startedAt = "started_at"
         case endedAt = "ended_at"
@@ -29,6 +34,7 @@ struct RecordingMetadata: Codable, Equatable {
         case desktopPath = "desktop_path"
         case micPath = "mic_path"
         case audioPath = "audio_path"
+        case uploadFileName = "upload_file_name"
         case fileToken = "file_token"
         case minuteURL = "minute_url"
         case minuteToken = "minute_token"
@@ -48,7 +54,9 @@ enum UploadStatusStore {
 
     static func writeInitial(session: RecordingSession, meeting: Meeting?) {
         let metadata = RecordingMetadata(
-            meetingTitle: meeting?.title ?? session.meetingTitle,
+            meetingTitle: session.meetingTitle,
+            titleSource: session.titleSource.rawValue,
+            calendarEventTitle: session.calendarEventTitle,
             attendees: meeting?.attendees ?? [],
             startedAt: session.startedAt,
             endedAt: nil,
@@ -56,6 +64,7 @@ enum UploadStatusStore {
             desktopPath: session.desktopURL.path,
             micPath: session.micURL.path,
             audioPath: session.outputURL.path,
+            uploadFileName: nil,
             fileToken: nil,
             minuteURL: nil,
             minuteToken: nil,
@@ -74,10 +83,13 @@ enum UploadStatusStore {
     static func markSaved(job: FeishuUploadJob) {
         update(folderURL: job.folderURL) { metadata in
             metadata.meetingTitle = job.meetingTitle
+            metadata.titleSource = job.titleSource?.rawValue ?? metadata.titleSource
+            metadata.calendarEventTitle = job.calendarEventTitle ?? metadata.calendarEventTitle
             metadata.attendees = job.attendees
             metadata.startedAt = job.startedAt
             metadata.endedAt = job.endedAt
             metadata.audioPath = job.audioURL.path
+            metadata.uploadFileName = job.uploadFileName
             metadata.uploadStatus = "saved"
             metadata.lastError = nil
         }
@@ -186,7 +198,9 @@ enum UploadStatusStore {
     static func markCaptureFailed(session: RecordingSession, meeting: Meeting?, error: Error) {
         let message = describe(error)
         update(folderURL: session.folderURL) { metadata in
-            metadata.meetingTitle = meeting?.title ?? session.meetingTitle
+            metadata.meetingTitle = session.meetingTitle
+            metadata.titleSource = session.titleSource.rawValue
+            metadata.calendarEventTitle = session.calendarEventTitle
             metadata.attendees = meeting?.attendees ?? []
             metadata.startedAt = session.startedAt
             metadata.endedAt = Date()
@@ -199,6 +213,7 @@ enum UploadStatusStore {
     static func markUploading(job: FeishuUploadJob) {
         update(folderURL: job.folderURL) { metadata in
             metadata.uploadStatus = "uploading"
+            metadata.uploadFileName = job.uploadFileName
             metadata.lastError = nil
         }
         appendLog(folderURL: job.folderURL, "Feishu upload started.")
@@ -242,10 +257,13 @@ enum UploadStatusStore {
         let message = describe(error)
         update(folderURL: job.folderURL) { metadata in
             metadata.meetingTitle = job.meetingTitle
+            metadata.titleSource = job.titleSource?.rawValue ?? metadata.titleSource
+            metadata.calendarEventTitle = job.calendarEventTitle ?? metadata.calendarEventTitle
             metadata.attendees = job.attendees
             metadata.startedAt = job.startedAt
             metadata.endedAt = job.endedAt
             metadata.audioPath = job.audioURL.path
+            metadata.uploadFileName = job.uploadFileName
             metadata.uploadStatus = "failed"
             metadata.lastError = message
         }
@@ -294,6 +312,8 @@ enum UploadStatusStore {
         let (date, title) = RecordingsLibrary.parseFolderName(folderURL.lastPathComponent)
         return RecordingMetadata(
             meetingTitle: title,
+            titleSource: nil,
+            calendarEventTitle: nil,
             attendees: [],
             startedAt: date,
             endedAt: nil,
@@ -301,6 +321,7 @@ enum UploadStatusStore {
             desktopPath: folderURL.appendingPathComponent("desktop.caf").path,
             micPath: folderURL.appendingPathComponent("mic.caf").path,
             audioPath: folderURL.appendingPathComponent("audio.m4a").path,
+            uploadFileName: nil,
             fileToken: nil,
             minuteURL: nil,
             minuteToken: nil,
