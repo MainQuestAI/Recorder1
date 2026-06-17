@@ -124,7 +124,7 @@ final class SystemAudioTap {
     /// Set true by `stop()` to tell the writer to drain and exit.
     private let writerShouldStop = OSAllocatedUnfairLock<Bool>(initialState: false)
 
-    private static let log = Logger(subsystem: "com.tobi.Recorder", category: "SystemAudioTap")
+    private static let log = Logger(subsystem: "com.dingcheng.Recorder1", category: "SystemAudioTap")
 
     // MARK: - Realtime-path flags (separately lock-protected so the IOProc never blocks on `lock`)
 
@@ -617,7 +617,7 @@ final class SystemAudioTap {
                 }
             }
         }
-        thread.name = "com.tobi.Recorder.desktopWriter"
+        thread.name = "com.dingcheng.Recorder1.desktopWriter"
         thread.qualityOfService = .userInitiated
         writerThread = thread
         thread.start()

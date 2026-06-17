@@ -41,16 +41,16 @@
   - Code signing verification passed.
   - Microphone, system audio capture, and calendar permissions are allowed.
   - Gemini remnants were not found.
-  - `lark-cli` resolved to `/Users/dingcheng/.npm-global/bin/lark-cli`.
+- `lark-cli` resolved from a local user install path.
   - Required Feishu scopes are available.
   - Failed upload preserves `audio.m4a`, writes `failed` metadata, and retry succeeds with the same relative `audio.m4a` path.
   - Latest local recording folder has `metadata.json`, `upload.log`, and `audio.m4a`.
   - Latest `audio.m4a` is playable stereo AAC and can be inspected for per-channel signal levels.
   - New app builds include post-mix `audio_quality` metadata for new recordings.
 
-## MainQuest Dark UI Update
+## Dark UI Update
 
-- `RecorderPanel.swift` was restyled using MainQuest-style dark glass tokens:
+- `RecorderPanel.swift` was restyled using dark glass tokens:
   - black page background `#030305`
   - low-opacity elevated/surface fills
   - subtle white borders
@@ -88,7 +88,7 @@
   - `upload.log`
   - `feishu_minutes.json`
   - `transcript.md`
-  - `minutes/obcn954m592edpbzd2czuge5/transcript.txt`
+  - `minutes/<minute_token>/transcript.txt`
 - `audio.m4a` confirmed by `afinfo`:
   - AAC m4a
   - 2 channels
@@ -103,9 +103,9 @@
   - conclusion: this short probe proves playable stereo output and active microphone capture; it does not prove active system/remote audio capture because the desktop channel is silent.
 - Upload metadata:
   - `upload_status = uploaded`
-  - `file_token = LBsabUsBso9306x9069cJ7ZOn4b`
-  - `minute_url = https://l2juegzht0.feishu.cn/minutes/obcn954m592edpbzd2czuge5`
-  - `minute_token = obcn954m592edpbzd2czuge5`
+  - `file_token = <redacted_file_token>`
+  - `minute_url = https://<tenant>.feishu.cn/minutes/<minute_token>`
+  - `minute_token = <redacted_minute_token>`
 - `vc +notes` behavior:
   - attempt 1 returned `minute not ready , try later`
   - attempt 2 returned `artifacts.transcript_file`
@@ -214,10 +214,10 @@ Observed output shape:
   "identity": "user",
   "data": {
     "file_name": "recorder1-stereo-65s-20260616.m4a",
-    "file_token": "Nx7jbm8Euohy2hxVkWCcJRdyn4f",
+    "file_token": "<file_token>",
     "size": 913224,
-    "url": "https://my.feishu.cn/file/Nx7jbm8Euohy2hxVkWCcJRdyn4f",
-    "version": "7652006816695503855"
+    "url": "https://my.feishu.cn/file/<file_token>",
+    "version": "<version>"
   }
 }
 ```
@@ -239,7 +239,7 @@ Observed output shape:
   "ok": true,
   "identity": "user",
   "data": {
-    "minute_url": "https://l2juegzht0.feishu.cn/minutes/obcn94fq3q44171159o7oe3m"
+    "minute_url": "https://<tenant>.feishu.cn/minutes/<minute_token>"
   }
 }
 ```
@@ -262,7 +262,7 @@ Observed pending output:
     "notes": [
       {
         "error": "minute not ready , try later",
-        "minute_token": "obcn94fq3q44171159o7oe3m"
+        "minute_token": "<minute_token>"
       }
     ]
   },
@@ -282,9 +282,9 @@ Observed ready output:
     "notes": [
       {
         "artifacts": {
-          "transcript_file": "minutes/obcn94fq3q44171159o7oe3m/transcript.txt"
+          "transcript_file": "minutes/<minute_token>/transcript.txt"
         },
-        "minute_token": "obcn94fq3q44171159o7oe3m",
+        "minute_token": "<minute_token>",
         "title": "recorder1-stereo-65s-20260616"
       }
     ]
