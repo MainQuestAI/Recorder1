@@ -55,6 +55,14 @@ final class RecorderModel {
     var preferredInputDeviceUID: String = "" {
         didSet { Preferences.preferredInputDeviceUID = preferredInputDeviceUID }
     }
+    var recordingRetentionPolicy: RecordingRetentionPolicy = .keepForever {
+        didSet {
+            Preferences.recordingRetentionPolicy = recordingRetentionPolicy
+            if !loadingPreferences {
+                runLocalCleanup(showStatus: true)
+            }
+        }
+    }
     var inputDevices: [AudioInputDeviceInfo] = []
 
     // Feishu upload (post-save).
@@ -81,6 +89,7 @@ final class RecorderModel {
     /// Everything needed to retry a Feishu upload, captured at save time.
     @ObservationIgnored private var lastUploadJob: FeishuUploadJob?
     @ObservationIgnored private var preparingToRecord = false
+    @ObservationIgnored private var loadingPreferences = false
 
     // MARK: - Lifecycle
 
@@ -89,6 +98,7 @@ final class RecorderModel {
         loadPreferences()
 
         // Load prior recordings from disk so they survive restarts.
+        runLocalCleanup(showStatus: false)
         refreshRecordings()
 
         // Request calendar access and load meetings. Microphone permission is
@@ -145,6 +155,9 @@ final class RecorderModel {
     /// Pull persisted preferences into the observable properties. The `didSet`
     /// write-backs are idempotent (same value in → same value out).
     private func loadPreferences() {
+        loadingPreferences = true
+        defer { loadingPreferences = false }
+
         silenceTimeout = Preferences.silenceTimeout
         silenceThresholdDB = Preferences.silenceThresholdDB
         silenceAutoStopEnabled = Preferences.silenceAutoStop
@@ -155,6 +168,7 @@ final class RecorderModel {
         openMinuteURLAfterUpload = Preferences.openMinuteURLAfterUpload
         language = Preferences.language
         preferredInputDeviceUID = Preferences.preferredInputDeviceUID
+        recordingRetentionPolicy = Preferences.recordingRetentionPolicy
         refreshInputDevices()
     }
 
@@ -423,6 +437,15 @@ final class RecorderModel {
         return AudioDeviceCatalog.defaultInputDevice()?.name ?? text("microphone.systemDefault")
     }
 
+    private func runLocalCleanup(showStatus: Bool) {
+        let result = RecordingCleanup.deleteExpiredUploadedRecordings(policy: recordingRetentionPolicy)
+        guard result.deletedCount > 0 || result.failedCount > 0 else { return }
+        refreshRecordings()
+        if showStatus, result.deletedCount > 0 {
+            statusMessage = text("status.cleanupDeleted", result.deletedCount)
+        }
+    }
+
     private func describeCaptureError(_ error: Error) -> String {
         if let micError = error as? MicCapture.MicError {
             switch micError {
@@ -534,6 +557,7 @@ final class RecorderModel {
                     if shouldOpen {
                         NSWorkspace.shared.open(result.minuteURL)
                     }
+                    self.runLocalCleanup(showStatus: false)
                     self.refreshRecordings()
                 }
             } catch {

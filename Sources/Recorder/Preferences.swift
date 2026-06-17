@@ -19,6 +19,7 @@ enum Preferences {
         static let openMinuteURL      = "openMinuteURLAfterUpload"
         static let language           = "appLanguage"
         static let inputDeviceUID     = "preferredInputDeviceUID"
+        static let retentionPolicy    = "recordingRetentionPolicy"
     }
 
     /// Seconds of two-channel silence before a recording auto-stops. Default 300 (5 min).
@@ -85,5 +86,17 @@ enum Preferences {
     static var preferredInputDeviceUID: String {
         get { defaults.string(forKey: Key.inputDeviceUID) ?? "" }
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Key.inputDeviceUID) }
+    }
+
+    /// Local recording retention after a successful Feishu Minutes upload. Default keep forever.
+    static var recordingRetentionPolicy: RecordingRetentionPolicy {
+        get {
+            guard let raw = defaults.string(forKey: Key.retentionPolicy),
+                  let policy = RecordingRetentionPolicy(rawValue: raw) else {
+                return .keepForever
+            }
+            return policy
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.retentionPolicy) }
     }
 }

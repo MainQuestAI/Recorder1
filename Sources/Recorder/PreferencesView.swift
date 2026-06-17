@@ -93,6 +93,20 @@ private struct GeneralPreferences: View {
             } header: {
                 Text(model.text("section.autoStop"))
             }
+
+            Section {
+                Picker(model.text("setting.retentionPolicy"), selection: $model.recordingRetentionPolicy) {
+                    ForEach(RecordingRetentionPolicy.allCases) { policy in
+                        Text(model.text(policy.textKey)).tag(policy)
+                    }
+                }
+
+                Text(model.text("retention.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text(model.text("section.localStorage"))
+            }
         }
         .formStyle(.grouped)
     }

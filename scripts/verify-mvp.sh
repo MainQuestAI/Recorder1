@@ -188,6 +188,7 @@ else
 fi
 
 run_step "failed upload preserves audio and retry succeeds" bash ./scripts/verify-upload-retry.sh
+run_step "local retention cleanup" bash ./scripts/verify-retention-cleanup.sh
 
 printf '\n==> Local recordings folder check\n'
 MEETING_ROOT="$HOME/Documents/Recorder1"
