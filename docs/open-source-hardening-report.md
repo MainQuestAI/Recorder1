@@ -121,7 +121,7 @@ Current names:
 
 | Surface | Current value |
 | --- | --- |
-| Repository | `Recorder-One` |
+| Repository | `MainQuestAI/Recorder1` |
 | App name | `Recorder1` |
 | App bundle | `Recorder1.app` |
 | Swift package | `Recorder` |
@@ -130,7 +130,7 @@ Current names:
 
 Recommendation for public release:
 
-- Keep `Recorder-One` as the GitHub repository name. It is readable and already published privately.
+- Use `MainQuestAI/Recorder1` as the public GitHub repository.
 - Keep `Recorder1` as the app name for the current MVP to avoid another macOS TCC permission reset.
 - Keep the Swift package and executable as `Recorder` for now because they are inherited from upstream and are not user-facing.
 - Consider a future breaking rename to `RecorderOne` / `recorder-one` / `com.mainquest.recorderone` only when preparing a packaged public release.
