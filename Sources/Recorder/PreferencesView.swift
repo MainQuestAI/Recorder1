@@ -2,15 +2,17 @@ import SwiftUI
 
 /// The content of the dedicated Preferences window.
 struct PreferencesView: View {
+    @Environment(RecorderModel.self) private var model
+
     var body: some View {
         TabView {
             GeneralPreferences()
-                .tabItem { Label("General", systemImage: "gearshape") }
+                .tabItem { Label(model.text("tab.general"), systemImage: "gearshape") }
 
             FeishuPreferences()
-                .tabItem { Label("Feishu", systemImage: "arrow.up.doc") }
+                .tabItem { Label(model.text("tab.feishu"), systemImage: "arrow.up.doc") }
         }
-        .frame(width: 480, height: 380)
+        .frame(width: 520, height: 460)
     }
 }
 
@@ -23,7 +25,44 @@ private struct GeneralPreferences: View {
         @Bindable var model = model
         Form {
             Section {
-                Toggle("Stop automatically after silence", isOn: $model.silenceAutoStopEnabled)
+                Picker(model.text("language.label"), selection: $model.language) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text(model.text("section.language"))
+            }
+
+            Section {
+                Picker(model.text("microphone.input"), selection: $model.preferredInputDeviceUID) {
+                    Text(defaultInputLabel)
+                        .tag("")
+                    ForEach(model.inputDevices) { device in
+                        Text(deviceLabel(device))
+                            .tag(device.uid)
+                    }
+                }
+
+                HStack {
+                    Text(model.text("microphone.note"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        model.refreshInputDevices()
+                    } label: {
+                        Label(model.text("microphone.refresh"), systemImage: "arrow.clockwise")
+                    }
+                    .controlSize(.small)
+                }
+            } header: {
+                Text(model.text("section.microphone"))
+            }
+
+            Section {
+                Toggle(model.text("autoStop.enabled"), isOn: $model.silenceAutoStopEnabled)
 
                 if model.silenceAutoStopEnabled {
                     Stepper(
@@ -33,29 +72,44 @@ private struct GeneralPreferences: View {
                         ),
                         in: 1...60
                     ) {
-                        Text("After \(Int((model.silenceTimeout / 60).rounded())) min of silence on both channels")
+                        Text(model.text("autoStop.after", Int((model.silenceTimeout / 60).rounded())))
                             .monospacedDigit()
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Silence threshold")
+                            Text(model.text("autoStop.threshold"))
                             Spacer()
                             Text("\(Int(model.silenceThresholdDB)) dB")
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
                         Slider(value: $model.silenceThresholdDB, in: -80 ... -20, step: 1)
-                        Text("A channel counts as silent below this level.")
+                        Text(model.text("autoStop.note"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
             } header: {
-                Text("Auto-stop")
+                Text(model.text("section.autoStop"))
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var defaultInputLabel: String {
+        "\(model.text("microphone.systemDefault")) · \(model.selectedInputDeviceDisplayName)"
+    }
+
+    private func deviceLabel(_ device: AudioInputDeviceInfo) -> String {
+        var label = device.name
+        if device.isDefault {
+            label += " · \(model.text("microphone.systemDefault"))"
+        }
+        if device.sampleRate > 0 {
+            label += " · \(Int(device.sampleRate)) Hz"
+        }
+        return label
     }
 }
 
@@ -69,29 +123,29 @@ private struct FeishuPreferences: View {
         Form {
             Section {
                 TextField(
-                    "lark-cli binary path",
+                    model.text("field.larkPath"),
                     text: $model.larkCLIPath,
-                    prompt: Text("/opt/homebrew/bin/lark-cli or PATH")
+                    prompt: Text(model.text("field.larkPathPrompt"))
                 )
-                Text("Leave blank to auto-detect Homebrew, npm global, and PATH locations.")
+                Text(model.text("cli.note"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("CLI")
+                Text(model.text("section.cli"))
             }
 
             Section {
-                Toggle("Auto upload after save", isOn: $model.autoUploadAfterSave)
-                Toggle("Fetch notes after upload", isOn: $model.fetchNotesAfterUpload)
+                Toggle(model.text("setting.autoUpload"), isOn: $model.autoUploadAfterSave)
+                Toggle(model.text("setting.fetchNotes"), isOn: $model.fetchNotesAfterUpload)
             } header: {
-                Text("Workflow")
+                Text(model.text("section.workflow"))
             }
 
             Section {
-                Toggle("Copy minute_url after upload", isOn: $model.copyMinuteURLAfterUpload)
-                Toggle("Open minute_url after upload", isOn: $model.openMinuteURLAfterUpload)
+                Toggle(model.text("setting.copyMinute"), isOn: $model.copyMinuteURLAfterUpload)
+                Toggle(model.text("setting.openMinute"), isOn: $model.openMinuteURLAfterUpload)
             } header: {
-                Text("After upload")
+                Text(model.text("section.afterUpload"))
             }
         }
         .formStyle(.grouped)

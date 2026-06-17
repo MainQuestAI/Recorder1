@@ -17,6 +17,8 @@ enum Preferences {
         static let fetchNotes         = "fetchNotesAfterUpload"
         static let copyMinuteURL      = "copyMinuteURLAfterUpload"
         static let openMinuteURL      = "openMinuteURLAfterUpload"
+        static let language           = "appLanguage"
+        static let inputDeviceUID     = "preferredInputDeviceUID"
     }
 
     /// Seconds of two-channel silence before a recording auto-stops. Default 300 (5 min).
@@ -65,5 +67,23 @@ enum Preferences {
     static var openMinuteURLAfterUpload: Bool {
         get { defaults.object(forKey: Key.openMinuteURL) == nil ? false : defaults.bool(forKey: Key.openMinuteURL) }
         set { defaults.set(newValue, forKey: Key.openMinuteURL) }
+    }
+
+    /// UI language. Default Chinese.
+    static var language: AppLanguage {
+        get {
+            guard let raw = defaults.string(forKey: Key.language),
+                  let language = AppLanguage(rawValue: raw) else {
+                return .zh
+            }
+            return language
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.language) }
+    }
+
+    /// Empty means use the macOS default input device.
+    static var preferredInputDeviceUID: String {
+        get { defaults.string(forKey: Key.inputDeviceUID) ?? "" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Key.inputDeviceUID) }
     }
 }

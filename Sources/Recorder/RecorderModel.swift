@@ -49,6 +49,13 @@ final class RecorderModel {
     var openMinuteURLAfterUpload: Bool = false {
         didSet { Preferences.openMinuteURLAfterUpload = openMinuteURLAfterUpload }
     }
+    var language: AppLanguage = .zh {
+        didSet { Preferences.language = language }
+    }
+    var preferredInputDeviceUID: String = "" {
+        didSet { Preferences.preferredInputDeviceUID = preferredInputDeviceUID }
+    }
+    var inputDevices: [AudioInputDeviceInfo] = []
 
     // Feishu upload (post-save).
     var uploadState: UploadState = .idle
@@ -112,7 +119,7 @@ final class RecorderModel {
         // Surface fatal capture errors to the UI.
         tap.onFatalError = { [weak self] error in
             DispatchQueue.main.async {
-                self?.statusMessage = "Desktop audio error: \(error.localizedDescription)"
+                self?.statusMessage = self?.text("status.desktopError", error.localizedDescription)
             }
         }
         tap.onRouteChanged = { [weak self] event in
@@ -125,12 +132,12 @@ final class RecorderModel {
             DispatchQueue.main.async {
                 guard let self, let session = self.currentSession else { return }
                 UploadStatusStore.markSystemAudioCaptureFailed(folderURL: session.folderURL, reason: reason)
-                self.statusMessage = "System audio capture is silent."
+                self.statusMessage = self.text("status.systemAudioSilent")
             }
         }
         mic.onFatalError = { [weak self] error in
             DispatchQueue.main.async {
-                self?.statusMessage = "Mic error: \(error.localizedDescription)"
+                self?.statusMessage = self?.text("status.micError", error.localizedDescription)
             }
         }
     }
@@ -146,6 +153,9 @@ final class RecorderModel {
         fetchNotesAfterUpload = Preferences.fetchNotesAfterUpload
         copyMinuteURLAfterUpload = Preferences.copyMinuteURLAfterUpload
         openMinuteURLAfterUpload = Preferences.openMinuteURLAfterUpload
+        language = Preferences.language
+        preferredInputDeviceUID = Preferences.preferredInputDeviceUID
+        refreshInputDevices()
     }
 
     // MARK: - Recording control
@@ -153,7 +163,7 @@ final class RecorderModel {
     func startRecording(meeting: Meeting?) {
         guard state == .idle, !preparingToRecord else { return }
         preparingToRecord = true
-        statusMessage = "Checking microphone permission..."
+        statusMessage = text("status.checkingMic")
         NSApp.activate(ignoringOtherApps: true)
 
         Task { @MainActor [weak self] in
@@ -161,9 +171,10 @@ final class RecorderModel {
             let micAllowed = await MicCapture.requestAccess()
             guard micAllowed else {
                 self.preparingToRecord = false
-                self.statusMessage = "Microphone permission is required. Allow it in System Settings."
+                self.statusMessage = self.text("status.micPermissionRequired")
                 return
             }
+            self.refreshInputDevices()
             self.preparingToRecord = false
             self.beginRecording(meeting: meeting)
         }
@@ -177,7 +188,7 @@ final class RecorderModel {
         do {
             session = try RecordingSession.create(now: now, meetingTitle: meeting?.title)
         } catch {
-            statusMessage = "Could not create recording folder: \(error.localizedDescription)"
+            statusMessage = text("status.createFolderFailed", error.localizedDescription)
             return
         }
         currentSession = session
@@ -223,9 +234,13 @@ final class RecorderModel {
         // Start both captures.
         do {
             try tap.start(writingTo: session.desktopURL)
-            try mic.start(writingTo: session.micURL)
+            try mic.start(
+                writingTo: session.micURL,
+                preferredInputDeviceUID: preferredInputDeviceUID.isEmpty ? nil : preferredInputDeviceUID
+            )
+            UploadStatusStore.markMicrophoneInput(folderURL: session.folderURL, device: mic.activeInputDevice)
         } catch {
-            statusMessage = "Could not start capture: \(error.localizedDescription)"
+            statusMessage = text("status.captureStartFailed", describeCaptureError(error))
             _ = tap.stop()
             _ = mic.stop()
             UploadStatusStore.markCaptureFailed(session: session, meeting: meeting, error: error)
@@ -240,7 +255,7 @@ final class RecorderModel {
 
         // Schedule a meeting-end alert when recording a known meeting.
         if let meeting {
-            notifications.scheduleMeetingEndAlert(at: meeting.end, meetingTitle: meeting.title)
+            notifications.scheduleMeetingEndAlert(at: meeting.end, meetingTitle: meeting.title, language: language)
         }
 
         state = .recording
@@ -276,7 +291,7 @@ final class RecorderModel {
 
         cancelTimersAndAlerts()
         state = .idle
-        statusMessage = "Mixing…"
+        statusMessage = text("status.mixing")
 
         // Mix off the main actor; keep raw CAFs regardless of outcome.
         let outputURL = session.outputURL
@@ -317,21 +332,21 @@ final class RecorderModel {
                     self.lastUploadJob = job
                     if integrity.requiresUploadConfirmation {
                         self.uploadState = .needsConfirmation(
-                            "只录到麦克风，没有录到系统/会议远端声音，是否仍要上传？"
+                            self.text("capture.degraded")
                         )
-                        self.statusMessage = "Saved \(outputURL.lastPathComponent) · system audio missing"
+                        self.statusMessage = self.text("status.savedSystemMissing", outputURL.lastPathComponent)
                     } else if self.autoUploadAfterSave {
-                        self.statusMessage = "Saved \(outputURL.lastPathComponent)"
+                        self.statusMessage = self.text("status.saved", outputURL.lastPathComponent)
                         self.startUpload(job)
                     } else {
                         self.uploadState = .idle
-                        self.statusMessage = "Saved \(outputURL.lastPathComponent) · auto upload off"
+                        self.statusMessage = self.text("status.savedAutoOff", outputURL.lastPathComponent)
                     }
                     self.refreshRecordings()
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    self?.statusMessage = "Mix failed (raw files kept): \(error.localizedDescription)"
+                    self?.statusMessage = self?.text("status.mixFailed", error.localizedDescription)
                 }
             }
         }
@@ -360,7 +375,7 @@ final class RecorderModel {
         currentSession = nil
         activeMeeting = nil
         silenceMonitor = nil
-        statusMessage = "Discarded"
+        statusMessage = text("status.discarded")
         uploadState = .idle
         lastMinuteURL = nil
         lastUploadJob = nil
@@ -386,6 +401,43 @@ final class RecorderModel {
     }
 
     // MARK: - Helpers
+
+    func text(_ key: String, _ values: CVarArg...) -> String {
+        let format = AppText.t(key, language)
+        guard !values.isEmpty else { return format }
+        return String(format: format, locale: Locale.current, arguments: values)
+    }
+
+    func refreshInputDevices() {
+        inputDevices = AudioDeviceCatalog.inputDevices()
+        if !preferredInputDeviceUID.isEmpty,
+           !inputDevices.contains(where: { $0.uid == preferredInputDeviceUID }) {
+            preferredInputDeviceUID = ""
+        }
+    }
+
+    var selectedInputDeviceDisplayName: String {
+        if let selected = inputDevices.first(where: { $0.uid == preferredInputDeviceUID }) {
+            return selected.name
+        }
+        return AudioDeviceCatalog.defaultInputDevice()?.name ?? text("microphone.systemDefault")
+    }
+
+    private func describeCaptureError(_ error: Error) -> String {
+        if let micError = error as? MicCapture.MicError {
+            switch micError {
+            case .couldNotCreateFile(_, let underlying):
+                return text("error.micFile", underlying.localizedDescription)
+            case .invalidInputFormat:
+                return text("error.invalidMicFormat")
+            case .inputDeviceUnavailable(let uid):
+                return text("error.inputDeviceUnavailable", uid)
+            case .setInputDeviceFailed(let uid, let status):
+                return text("error.setInputDeviceFailed", uid, "\(status)")
+            }
+        }
+        return error.localizedDescription
+    }
 
     private func startElapsedTimer(from start: Date) {
         recordingStartedAt = start
@@ -424,7 +476,7 @@ final class RecorderModel {
 
     func retryUpload() {
         guard let job = lastUploadJob else {
-            statusMessage = "No saved audio.m4a to upload."
+            statusMessage = text("status.noAudioToUpload")
             return
         }
         startUpload(job)
@@ -432,7 +484,7 @@ final class RecorderModel {
 
     func confirmUploadDespiteDegradedAudio() {
         guard let job = lastUploadJob else {
-            statusMessage = "No saved audio.m4a to upload."
+            statusMessage = text("status.noAudioToUpload")
             return
         }
         UploadStatusStore.appendLog(folderURL: job.folderURL, "User confirmed upload despite degraded recording acceptance.")
@@ -441,7 +493,7 @@ final class RecorderModel {
 
     func uploadExisting(_ entry: RecordingEntry) {
         guard let audio = entry.audioURL else {
-            statusMessage = "No audio.m4a in that folder."
+            statusMessage = text("status.noAudioToUpload")
             return
         }
         let metadata = UploadStatusStore.readMetadata(folderURL: entry.folderURL)
@@ -460,7 +512,7 @@ final class RecorderModel {
         lastUploadJob = job
         uploadState = .running
         lastMinuteURL = nil
-        statusMessage = "Uploading to Feishu..."
+        statusMessage = text("status.uploadingFeishu")
 
         let cliPath = larkCLIPath
         let fetchNotes = fetchNotesAfterUpload
@@ -475,7 +527,7 @@ final class RecorderModel {
                     guard let self else { return }
                     self.lastMinuteURL = result.minuteURL
                     self.uploadState = .uploaded(result.minuteURL)
-                    self.statusMessage = "Uploaded to Feishu Minutes"
+                    self.statusMessage = self.text("status.uploadedFeishu")
                     if shouldCopy {
                         self.copyMinuteURL(result.minuteURL)
                     }
@@ -490,7 +542,7 @@ final class RecorderModel {
                 await MainActor.run {
                     guard let self else { return }
                     self.uploadState = .failed(message)
-                    self.statusMessage = "Upload failed"
+                    self.statusMessage = self.text("status.uploadFailed")
                     self.refreshRecordings()
                 }
             }
@@ -511,7 +563,7 @@ final class RecorderModel {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(url.absoluteString, forType: .string)
-        statusMessage = "Minute URL copied"
+        statusMessage = text("status.minuteCopied")
     }
 
     func openMinuteURL(_ url: URL) {
@@ -535,19 +587,19 @@ final class RecorderModel {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([url as NSURL])
-        statusMessage = "Copied \(url.lastPathComponent)"
+        statusMessage = text("status.fileCopied", url.lastPathComponent)
     }
 
     /// Put a text file's contents on the clipboard.
     func copyTextOfFile(_ url: URL) {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            statusMessage = "Could not read \(url.lastPathComponent)"
+        guard let fileText = try? String(contentsOf: url, encoding: .utf8) else {
+            statusMessage = text("status.fileReadFailed", url.lastPathComponent)
             return
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        statusMessage = "Copied text of \(url.lastPathComponent)"
+        pasteboard.setString(fileText, forType: .string)
+        statusMessage = text("status.textCopied", url.lastPathComponent)
     }
 
     /// Reveal an arbitrary file/folder in Finder.

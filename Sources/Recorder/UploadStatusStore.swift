@@ -17,6 +17,7 @@ struct RecordingMetadata: Codable, Equatable {
     var audioQuality: AudioQualityReport?
     var systemAudioCapture: SystemAudioCaptureMetadata?
     var captureIntegrity: CaptureIntegrity?
+    var microphoneInput: AudioInputDeviceInfo?
     var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -36,6 +37,7 @@ struct RecordingMetadata: Codable, Equatable {
         case audioQuality = "audio_quality"
         case systemAudioCapture = "system_audio_capture"
         case captureIntegrity = "capture_integrity"
+        case microphoneInput = "microphone_input"
         case updatedAt = "updated_at"
     }
 }
@@ -62,6 +64,7 @@ enum UploadStatusStore {
             audioQuality: nil,
             systemAudioCapture: nil,
             captureIntegrity: nil,
+            microphoneInput: nil,
             updatedAt: Date()
         )
         write(metadata, folderURL: session.folderURL)
@@ -124,6 +127,17 @@ enum UploadStatusStore {
         for event in capture.fallbackEvents {
             appendLog(folderURL: folderURL, "System audio fallback: \(event)")
         }
+    }
+
+    static func markMicrophoneInput(folderURL: URL, device: AudioInputDeviceInfo?) {
+        guard let device else { return }
+        update(folderURL: folderURL) { metadata in
+            metadata.microphoneInput = device
+        }
+        appendLog(
+            folderURL: folderURL,
+            "Microphone input: device=\(device.name) uid=\(device.uid) sample_rate=\(device.sampleRate) channels=\(device.inputChannelCount) default=\(device.isDefault)"
+        )
     }
 
     static func markCaptureIntegrity(folderURL: URL, integrity: CaptureIntegrity) {
@@ -292,6 +306,7 @@ enum UploadStatusStore {
             audioQuality: nil,
             systemAudioCapture: nil,
             captureIntegrity: nil,
+            microphoneInput: nil,
             updatedAt: Date()
         )
     }

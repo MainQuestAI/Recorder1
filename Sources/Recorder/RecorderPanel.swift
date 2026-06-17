@@ -239,14 +239,14 @@ struct RecorderPanel: View {
         switch model.state {
         case .idle:
             switch model.uploadState {
-            case .idle: return "Ready"
-            case .needsConfirmation: return "Audio incomplete"
-            case .running: return "Uploading"
-            case .uploaded: return "Uploaded"
-            case .failed: return "Upload failed"
+            case .idle: return model.text("state.ready")
+            case .needsConfirmation: return model.text("state.audioIncomplete")
+            case .running: return model.text("state.uploading")
+            case .uploaded: return model.text("state.uploaded")
+            case .failed: return model.text("state.uploadFailed")
             }
-        case .recording: return "Recording"
-        case .paused:    return "Paused"
+        case .recording: return model.text("state.recording")
+        case .paused:    return model.text("state.paused")
         }
     }
 
@@ -294,7 +294,7 @@ struct RecorderPanel: View {
                         Button {
                             model.startRecording(meeting: current)
                         } label: {
-                            Label("Record Meeting", systemImage: "record.circle.fill")
+                            Label(model.text("action.recordMeeting"), systemImage: "record.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
                         .controlSize(.large)
@@ -309,9 +309,9 @@ struct RecorderPanel: View {
                         }
                         .controlSize(.large)
                         .buttonStyle(MQButtonStyle(kind: .icon))
-                        .help("Record without attaching to a meeting")
+                        .help(model.text("action.recordNoMeeting"))
                     }
-                    Text("Tags this recording as “\(current.title)”.")
+                    Text(model.text("text.tagRecording", current.title))
                         .font(.caption2)
                         .foregroundStyle(MQTheme.textSecondary)
                         .lineLimit(1)
@@ -323,7 +323,7 @@ struct RecorderPanel: View {
                     Button {
                         model.startRecording(meeting: nil)
                     } label: {
-                        Label("Record", systemImage: "record.circle.fill")
+                        Label(model.text("action.record"), systemImage: "record.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .controlSize(.large)
@@ -340,7 +340,7 @@ struct RecorderPanel: View {
                         model.togglePause()
                     } label: {
                         Label(
-                            model.state == .paused ? "Resume" : "Pause",
+                            model.state == .paused ? model.text("action.resume") : model.text("action.pause"),
                             systemImage: model.state == .paused ? "play.fill" : "pause.fill"
                         )
                         .frame(maxWidth: .infinity)
@@ -352,7 +352,7 @@ struct RecorderPanel: View {
                     Button {
                         model.saveAndStop()
                     } label: {
-                        Label("Stop", systemImage: "stop.fill")
+                        Label(model.text("action.stop"), systemImage: "stop.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .controlSize(.large)
@@ -367,7 +367,7 @@ struct RecorderPanel: View {
                     }
                     .controlSize(.large)
                     .buttonStyle(MQButtonStyle(kind: .danger))
-                    .help("Discard this recording")
+                    .help(model.text("help.discard"))
                 }
             }
         }
@@ -400,7 +400,7 @@ struct RecorderPanel: View {
                     Button {
                         model.confirmUploadDespiteDegradedAudio()
                     } label: {
-                        Label("Upload Anyway", systemImage: "arrow.up.circle")
+                        Label(model.text("action.uploadAnyway"), systemImage: "arrow.up.circle")
                     }
                     .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.warning), compact: true))
 
@@ -411,7 +411,7 @@ struct RecorderPanel: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
-                    .help("Reveal recording folder")
+                    .help(model.text("help.revealFolder"))
 
                     Spacer()
                 }
@@ -424,7 +424,7 @@ struct RecorderPanel: View {
                     ProgressView()
                         .controlSize(.small)
                         .tint(MQTheme.info)
-                    Text("Uploading to Feishu Minutes...")
+                    Text(model.text("text.uploadingFeishu"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(MQTheme.textSecondary)
                     Spacer()
@@ -436,7 +436,7 @@ struct RecorderPanel: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(MQTheme.success)
-                    Text("Uploaded")
+                    Text(model.text("state.uploaded"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(MQTheme.textPrimary)
                     Spacer()
@@ -446,18 +446,18 @@ struct RecorderPanel: View {
                     Button {
                         model.openMinuteURL(url)
                     } label: {
-                        Label("Open Minute", systemImage: "arrow.up.forward.app")
+                        Label(model.text("action.openMinute"), systemImage: "arrow.up.forward.app")
                     }
                     .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.success), compact: true))
-                    .help("Open Feishu Minutes")
+                    .help(model.text("help.openMinute"))
 
                     Button {
                         model.copyMinuteURL(url)
                     } label: {
-                        Label("Copy URL", systemImage: "link")
+                        Label(model.text("action.copyURL"), systemImage: "link")
                     }
                     .buttonStyle(MQButtonStyle(kind: .secondary, compact: true))
-                    .help("Copy minute_url")
+                    .help(model.text("help.copyMinute"))
 
                     Button {
                         model.revealLastUploadFolder()
@@ -466,7 +466,7 @@ struct RecorderPanel: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
-                    .help("Reveal recording folder")
+                    .help(model.text("help.revealFolder"))
 
                     Spacer()
                 }
@@ -487,7 +487,7 @@ struct RecorderPanel: View {
                 Button {
                     model.retryUpload()
                 } label: {
-                    Label("Retry Upload", systemImage: "arrow.clockwise")
+                    Label(model.text("action.retryUpload"), systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.warning), compact: true))
                 .controlSize(.small)
@@ -499,8 +499,8 @@ struct RecorderPanel: View {
 
     private var meters: some View {
         MQCard(spacing: 9) {
-            LevelMeter(label: "Desktop (L)", level: model.desktopLevel, tint: MQTheme.success)
-            LevelMeter(label: "Mic (R)",     level: model.micLevel,     tint: MQTheme.info)
+            LevelMeter(label: model.text("meter.desktop"), level: model.desktopLevel, tint: MQTheme.success)
+            LevelMeter(label: model.text("meter.mic"), level: model.micLevel, tint: MQTheme.info)
         }
     }
 
@@ -509,7 +509,7 @@ struct RecorderPanel: View {
     private var meetingsSection: some View {
         MQCard(spacing: 8) {
             HStack {
-                Text("Meetings")
+                Text(model.text("text.meetings"))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(MQTheme.textPrimary)
                 Spacer()
@@ -520,11 +520,11 @@ struct RecorderPanel: View {
                         .frame(width: 16, height: 16)
                 }
                 .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
-                .help("Refresh meetings")
+                .help(model.text("help.refreshMeetings"))
             }
 
             if model.meetings.isEmpty {
-                Text("No meetings nearby.")
+                Text(model.text("text.noMeetings"))
                     .font(.caption)
                     .foregroundStyle(MQTheme.textMuted)
                     .padding(.vertical, 2)
@@ -535,6 +535,7 @@ struct RecorderPanel: View {
                             meeting: meeting,
                             inProgress: meeting.isInProgress(Date()),
                             canStart: model.state == .idle,
+                            language: model.language,
                             onRecord: { model.startRecording(meeting: meeting) }
                         )
                     }
@@ -547,7 +548,7 @@ struct RecorderPanel: View {
 
     private var recentSection: some View {
         MQCard(spacing: 8) {
-            Text("Recent recordings")
+            Text(model.text("text.recent"))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(MQTheme.textPrimary)
 
@@ -568,7 +569,7 @@ struct RecorderPanel: View {
                     .foregroundStyle(entry.isUploaded ? MQTheme.success : (entry.hasTranscript ? MQTheme.info : MQTheme.textMuted))
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.displayTitle)
+                    Text(recentTitle(entry))
                         .font(.callout)
                         .foregroundStyle(MQTheme.textPrimary)
                         .lineLimit(1)
@@ -588,42 +589,45 @@ struct RecorderPanel: View {
             }
             .contentShape(Rectangle())
             .onDrag { recentDragProvider(entry) }
-            .help("Drag the recording artifact out, or use the actions menu")
+            .help(model.text("help.dragRecent"))
 
             // Actions menu.
             Menu {
                 if let minuteURL = entry.minuteURL {
                     Button { model.openMinuteURL(minuteURL) } label: {
-                        Label("Open Minute", systemImage: "arrow.up.forward.app")
+                        Label(model.text("action.openMinute"), systemImage: "arrow.up.forward.app")
                     }
                     Button { model.copyMinuteURL(minuteURL) } label: {
-                        Label("Copy Minute URL", systemImage: "link")
+                        Label(model.text("action.copyMinuteURL"), systemImage: "link")
                     }
                     Divider()
                 }
 
                 if let audio = entry.audioURL {
                     Button { model.uploadExisting(entry) } label: {
-                        Label(entry.isUploaded ? "Retry Upload" : "Upload to Feishu", systemImage: "arrow.clockwise")
+                        Label(
+                            entry.isUploaded ? model.text("action.retryUpload") : model.text("action.uploadToFeishu"),
+                            systemImage: "arrow.clockwise"
+                        )
                     }
                     .disabled(model.uploadState == .running)
                     Button { model.copyFileToPasteboard(audio) } label: {
-                        Label("Copy audio file", systemImage: "waveform")
+                        Label(model.text("action.copyAudioFile"), systemImage: "waveform")
                     }
                 }
 
                 if let transcript = entry.transcriptURL {
                     Divider()
                     Button { model.copyTextOfFile(transcript) } label: {
-                        Label("Copy transcript text", systemImage: "doc.on.clipboard")
+                        Label(model.text("action.copyTranscriptText"), systemImage: "doc.on.clipboard")
                     }
                     Button { model.copyFileToPasteboard(transcript) } label: {
-                        Label("Copy transcript file", systemImage: "doc.on.doc")
+                        Label(model.text("action.copyTranscriptFile"), systemImage: "doc.on.doc")
                     }
                 }
                 Divider()
                 Button { model.reveal(entry.folderURL) } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
+                    Label(model.text("action.revealFinder"), systemImage: "folder")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -632,7 +636,7 @@ struct RecorderPanel: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Actions")
+            .help(model.text("help.recentActions"))
         }
         .padding(.vertical, 3)
         .padding(.horizontal, 6)
@@ -663,6 +667,13 @@ struct RecorderPanel: View {
         return "waveform.circle.fill"
     }
 
+    private func recentTitle(_ entry: RecordingEntry) -> String {
+        if let title = entry.title, !title.isEmpty {
+            return title
+        }
+        return model.text("text.recordingFallback")
+    }
+
     /// "6/3/26, 10:15 AM · Uploaded" — compact date + status.
     private func recentSubtitle(_ entry: RecordingEntry) -> String {
         let formatter = DateFormatter()
@@ -671,13 +682,13 @@ struct RecorderPanel: View {
         let when = formatter.string(from: entry.date)
         let status: String
         if entry.isUploaded {
-            status = "Uploaded"
+            status = model.text("recent.uploaded")
         } else if entry.uploadStatus == "failed" {
-            status = "Upload failed"
+            status = model.text("recent.uploadFailed")
         } else if entry.audioURL != nil {
-            status = "Audio ready"
+            status = model.text("recent.audioReady")
         } else {
-            status = "Raw only"
+            status = model.text("recent.rawOnly")
         }
         return "\(when) · \(status)"
     }
@@ -689,26 +700,26 @@ struct RecorderPanel: View {
             Button {
                 model.openRecordingsFolder()
             } label: {
-                Label("Recordings", systemImage: "folder")
+                Label(model.text("action.recordings"), systemImage: "folder")
             }
             .buttonStyle(MQButtonStyle(kind: .secondary, compact: true))
-            .help("Open ~/Documents/MeetingCapture in Finder")
+            .help(model.text("help.openFolder"))
 
             Spacer()
 
             Button {
                 openPreferences()
             } label: {
-                Label("Settings…", systemImage: "gearshape")
+                Label(model.text("action.settings"), systemImage: "gearshape")
             }
             .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .keyboardShortcut(",", modifiers: [.command])
-            .help("Open Preferences")
+            .help(model.text("help.openPreferences"))
 
             Button {
                 model.quit()
             } label: {
-                Label("Quit", systemImage: "power")
+                Label(model.text("action.quit"), systemImage: "power")
             }
             .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .keyboardShortcut("q", modifiers: [.command])
@@ -782,6 +793,7 @@ private struct MeetingRow: View {
     let meeting: Meeting
     let inProgress: Bool
     let canStart: Bool
+    let language: AppLanguage
     let onRecord: () -> Void
 
     var body: some View {
@@ -814,7 +826,7 @@ private struct MeetingRow: View {
             }
             .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
             .disabled(!canStart)
-            .help("Record this meeting")
+            .help(text("help.recordThisMeeting"))
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 6)
@@ -834,5 +846,9 @@ private struct MeetingRow: View {
         fmt.timeStyle = .short
         fmt.dateStyle = .none
         return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
+    }
+
+    private func text(_ key: String) -> String {
+        AppText.t(key, language)
     }
 }

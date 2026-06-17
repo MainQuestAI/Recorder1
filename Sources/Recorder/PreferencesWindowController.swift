@@ -31,13 +31,14 @@ final class PreferencesWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         if let window {
+            window.title = AppText.t("window.settings", model.language)
             window.makeKeyAndOrderFront(nil)
             return
         }
 
         let hosting = NSHostingController(rootView: PreferencesView().environment(model))
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Meeting Capture Settings"
+        window.title = AppText.t("window.settings", model.language)
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.delegate = self

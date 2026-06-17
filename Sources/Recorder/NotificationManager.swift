@@ -63,7 +63,7 @@ final class NotificationManager {
         //    the delegate activating the app before invoking the stop handler.
         let stopAction = UNNotificationAction(
             identifier: Self.stopActionIdentifier,
-            title: "Stop Recording",
+            title: AppText.t("notice.stopRecording", Preferences.language),
             options: [.foreground]
         )
         let category = UNNotificationCategory(
@@ -91,12 +91,16 @@ final class NotificationManager {
     ///
     /// Uses a single fixed request id ("meeting-end"), so scheduling again
     /// replaces any previously scheduled alert.
-    func scheduleMeetingEndAlert(at endDate: Date, meetingTitle: String) {
+    func scheduleMeetingEndAlert(at endDate: Date, meetingTitle: String, language: AppLanguage) {
         let center = UNUserNotificationCenter.current()
 
         let content = UNMutableNotificationContent()
-        content.title = "Meeting ended — still recording"
-        content.body = "\(meetingTitle) was scheduled to end. Stop and save?"
+        content.title = AppText.t("notice.meetingEndedTitle", language)
+        content.body = String(
+            format: AppText.t("notice.meetingEndedBody", language),
+            locale: Locale.current,
+            meetingTitle
+        )
         content.categoryIdentifier = Self.categoryIdentifier
         content.interruptionLevel = .timeSensitive   // pierce Focus when timely
         content.sound = .default

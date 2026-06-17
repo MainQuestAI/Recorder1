@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AudioToolbox
 import os
 
 /// Microphone capture via `AVAudioEngine`'s input node, written MONO to `mic.caf`.
@@ -32,6 +33,8 @@ final class MicCapture {
     enum MicError: LocalizedError {
         case couldNotCreateFile(URL, underlying: Error)
         case invalidInputFormat
+        case inputDeviceUnavailable(String)
+        case setInputDeviceFailed(String, OSStatus)
 
         var errorDescription: String? {
             switch self {
@@ -39,6 +42,10 @@ final class MicCapture {
                 return "Could not open mic file at \(url.lastPathComponent): \(underlying.localizedDescription)"
             case .invalidInputFormat:
                 return "Microphone reported an unusable input format (0 channels or 0 Hz)."
+            case .inputDeviceUnavailable(let uid):
+                return "Selected microphone is no longer available: \(uid)"
+            case .setInputDeviceFailed(let uid, let status):
+                return "Could not use selected microphone \(uid) (OSStatus \(status))."
             }
         }
     }
@@ -72,6 +79,11 @@ final class MicCapture {
 
     /// Whether a tap is currently installed / engine running.
     private var running = false
+    private var currentDevice: AudioInputDeviceInfo?
+
+    var activeInputDevice: AudioInputDeviceInfo? {
+        lock.withLock { currentDevice }
+    }
 
     // MARK: - Authorization
 
@@ -94,7 +106,12 @@ final class MicCapture {
     // MARK: - Start
 
     /// Begin capturing the microphone, writing MONO Float32 to `url` (CAF).
-    func start(writingTo url: URL) throws {
+    func start(writingTo url: URL, preferredInputDeviceUID: String? = nil) throws {
+        if let preferredInputDeviceUID,
+           !preferredInputDeviceUID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try applyPreferredInputDevice(uid: preferredInputDeviceUID)
+        }
+
         // Pull the LIVE hardware input format — never hardcode the sample rate.
         let inputNode = engine.inputNode
         let inputFormat = inputNode.inputFormat(forBus: 0)
@@ -137,6 +154,7 @@ final class MicCapture {
             self.sampleRate = inputFormat.sampleRate
             self.frameCount = 0
             self.running = true
+            self.currentDevice = resolvedCurrentInputDevice(preferredInputDeviceUID: preferredInputDeviceUID)
         }
 
         // Install the tap on the INPUT format (passing `nil` lets the engine use the
@@ -267,7 +285,42 @@ final class MicCapture {
             )
             self.running = false
             self.file = nil   // releasing the AVAudioFile finalizes the CAF on disk
+            self.currentDevice = nil
             return result
         }
+    }
+
+    private func applyPreferredInputDevice(uid: String) throws {
+        let deviceID: AudioDeviceID
+        do {
+            deviceID = try AudioDeviceCatalog.inputDeviceID(uid: uid)
+        } catch {
+            throw MicError.inputDeviceUnavailable(uid)
+        }
+
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            throw MicError.setInputDeviceFailed(uid, kAudioHardwareBadObjectError)
+        }
+
+        var mutableDeviceID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        guard status == noErr else {
+            throw MicError.setInputDeviceFailed(uid, status)
+        }
+    }
+
+    private func resolvedCurrentInputDevice(preferredInputDeviceUID: String?) -> AudioInputDeviceInfo? {
+        if let preferredInputDeviceUID,
+           !preferredInputDeviceUID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return AudioDeviceCatalog.inputDevices().first { $0.uid == preferredInputDeviceUID }
+        }
+        return AudioDeviceCatalog.defaultInputDevice()
     }
 }

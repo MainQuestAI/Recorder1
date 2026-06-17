@@ -17,6 +17,7 @@ swiftc \
 swiftc \
   -o "$PROBE_BIN" \
   Sources/Recorder/AudioQualityAnalyzer.swift \
+  Sources/Recorder/AudioDeviceCatalog.swift \
   Sources/Recorder/SystemAudioCaptureMetadata.swift \
   Sources/Recorder/Shared.swift \
   Sources/Recorder/RecordingsLibrary.swift \
