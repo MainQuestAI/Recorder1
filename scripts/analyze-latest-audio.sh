@@ -6,7 +6,7 @@ cd "$ROOT"
 
 MIN_DURATION="${1:-1}"
 shift || true
-MEETING_ROOT="$HOME/Documents/MeetingCapture"
+MEETING_ROOT="$HOME/Documents/Recorder1"
 
 if [[ ! -d "$MEETING_ROOT" ]]; then
   echo "FAIL recording folder not found: $MEETING_ROOT" >&2

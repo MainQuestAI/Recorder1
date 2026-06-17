@@ -104,7 +104,7 @@ enum SystemAudioDiagnostics {
 
     private static func run() throws -> Result {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MeetingCaptureSystemAudio-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Recorder1SystemAudio-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let desktopURL = folder.appendingPathComponent("desktop.caf")
 
@@ -154,7 +154,7 @@ enum SystemAudioDiagnostics {
 
     private static func runRecordingAcceptance() throws -> Result {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MeetingCaptureAudioAcceptance-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Recorder1AudioAcceptance-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let desktopURL = folder.appendingPathComponent("desktop.caf")
         let micURL = folder.appendingPathComponent("mic.caf")

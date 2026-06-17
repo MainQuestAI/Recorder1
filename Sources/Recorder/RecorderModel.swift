@@ -607,7 +607,7 @@ final class RecorderModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    /// Open ~/Documents/MeetingCapture in Finder (creating it if needed).
+    /// Open ~/Documents/Recorder1 in Finder (creating it if needed).
     func openRecordingsFolder() {
         guard let root = RecordingsLibrary.recordingsRoot() else { return }
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

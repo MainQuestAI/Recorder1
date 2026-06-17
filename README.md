@@ -18,7 +18,7 @@ macOS menu-bar recorder for capturing meeting audio and sending the saved record
 Recordings are written under:
 
 ```text
-~/Documents/MeetingCapture/{YYYY-MM-DD_HHmm}-{meeting-title}/
+~/Documents/Recorder1/{YYYY-MM-DD_HHmm}-{meeting-title}/
   desktop.caf
   mic.caf
   audio.m4a

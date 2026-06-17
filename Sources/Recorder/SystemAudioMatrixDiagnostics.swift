@@ -627,7 +627,7 @@ enum SystemAudioMatrixDiagnostics {
 
     private static func playDiagnosticTone() throws -> AVAudioPlayer {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MeetingCaptureMatrixTone-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Recorder1MatrixTone-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let toneURL = folder.appendingPathComponent("tone.wav")
         guard let format = AVAudioFormat(
@@ -670,7 +670,7 @@ enum SystemAudioMatrixDiagnostics {
 
     private static func playAfplayTone(duration: TimeInterval) throws -> (process: Process, toneURL: URL) {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MeetingCaptureAfplayTone-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Recorder1AfplayTone-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let toneURL = folder.appendingPathComponent("tone.wav")
         guard let format = AVAudioFormat(

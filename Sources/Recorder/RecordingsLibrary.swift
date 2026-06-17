@@ -1,6 +1,6 @@
 import Foundation
 
-/// One past recording on disk (a folder under ~/Documents/MeetingCapture).
+/// One past recording on disk (a folder under ~/Documents/Recorder1).
 struct RecordingEntry: Identifiable, Equatable {
     /// Folder path — stable identity.
     var id: String { folderURL.path }
@@ -31,12 +31,9 @@ struct RecordingEntry: Identifiable, Equatable {
 /// relaunches.
 enum RecordingsLibrary {
 
-    /// ~/Documents/MeetingCapture (not created here).
+    /// ~/Documents/Recorder1 (not created here).
     static func recordingsRoot() -> URL? {
-        guard let documents = try? FileManager.default.url(
-            for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ) else { return nil }
-        return documents.appendingPathComponent("MeetingCapture", isDirectory: true)
+        try? RecorderPaths.recordingsRoot(create: false)
     }
 
     /// The `limit` most recent recording folders, newest first.

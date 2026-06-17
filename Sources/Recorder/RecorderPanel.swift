@@ -129,7 +129,7 @@ private struct MQButtonStyle: ButtonStyle {
 ///   2. Primary controls — Record (idle) OR Pause/Resume + Save + Trash (recording/paused)
 ///   3. Two level meters — "Desktop (L)" + "Mic (R)" bound to model.desktopLevel/micLevel
 ///   4. Meetings list — title + time range, with a per-row record button; in-progress highlighted
-///   5. Footer — MeetingCapture folder + Settings… + Quit
+///   5. Footer — Recorder1 folder + Settings… + Quit
 ///
 /// Preferences (Feishu CLI upload settings and silence auto-stop) live in a dedicated Preferences window — see
 /// `PreferencesView` / `PreferencesWindowController` — opened from the footer's

@@ -1,6 +1,26 @@
 import Foundation
 import AVFoundation
 
+enum RecorderPaths {
+    static let recordingsFolderName = "Recorder1"
+
+    static func recordingsRoot(create: Bool) throws -> URL {
+        let fm = FileManager.default
+        let documents = try fm.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: create
+        )
+        let root = documents.appendingPathComponent(recordingsFolderName, isDirectory: true)
+
+        if create {
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        return root
+    }
+}
+
 // MARK: - RecorderState
 
 enum RecorderState: Equatable {
@@ -122,7 +142,7 @@ struct Meeting: Identifiable, Equatable {
 // MARK: - RecordingSession
 
 struct RecordingSession {
-    /// ~/Documents/MeetingCapture/{yyyy-MM-dd_HHmm}[-suffix]/
+    /// ~/Documents/Recorder1/{yyyy-MM-dd_HHmm}[-suffix]/
     let folderURL: URL
     /// folderURL + "desktop.caf"
     let desktopURL: URL
@@ -137,14 +157,7 @@ struct RecordingSession {
     static func create(now: Date, meetingTitle: String?) throws -> RecordingSession {
         let fm = FileManager.default
 
-        let documents = try fm.url(
-            for: .documentDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let recordingsRoot = documents
-            .appendingPathComponent("MeetingCapture", isDirectory: true)
+        let recordingsRoot = try RecorderPaths.recordingsRoot(create: true)
 
         let dateFmt = DateFormatter()
         dateFmt.locale = Locale(identifier: "en_US_POSIX")

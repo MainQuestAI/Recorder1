@@ -190,7 +190,8 @@ fi
 run_step "failed upload preserves audio and retry succeeds" bash ./scripts/verify-upload-retry.sh
 
 printf '\n==> Local recordings folder check\n'
-MEETING_ROOT="$HOME/Documents/MeetingCapture"
+MEETING_ROOT="$HOME/Documents/Recorder1"
+LATEST_AUDIO=""
 if [[ -d "$MEETING_ROOT" ]]; then
   pass "$MEETING_ROOT exists"
   LATEST="$(find "$MEETING_ROOT" -maxdepth 1 -type d -name '20*' -print | sort | tail -n 1 || true)"
@@ -198,7 +199,12 @@ if [[ -d "$MEETING_ROOT" ]]; then
     printf 'Latest recording folder: %s\n' "$LATEST"
     [[ -f "$LATEST/metadata.json" ]] && pass "latest metadata.json exists" || warn "latest metadata.json is missing"
     [[ -f "$LATEST/upload.log" ]] && pass "latest upload.log exists" || warn "latest upload.log is missing"
-    [[ -f "$LATEST/audio.m4a" ]] && pass "latest audio.m4a exists" || warn "latest audio.m4a is missing"
+    if [[ -f "$LATEST/audio.m4a" ]]; then
+      pass "latest audio.m4a exists"
+      LATEST_AUDIO="$LATEST/audio.m4a"
+    else
+      warn "latest audio.m4a is missing"
+    fi
   else
     warn "no recording folder found yet"
   fi
@@ -206,7 +212,11 @@ else
   warn "$MEETING_ROOT does not exist yet"
 fi
 
-run_step "latest audio is playable stereo m4a" bash ./scripts/analyze-latest-audio.sh 1 --allow-silent-channel
+if [[ -n "$LATEST_AUDIO" ]]; then
+  run_step "latest audio is playable stereo m4a" bash ./scripts/analyze-latest-audio.sh 1 --allow-silent-channel
+else
+  warn "latest audio check skipped because no saved recording exists yet"
+fi
 
 printf '\n==> Manual checks still required\n'
 if [[ "$PERMISSIONS_CONFIRMED" != true ]]; then
