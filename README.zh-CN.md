@@ -62,6 +62,7 @@ Recorder1 保留这些本地录音能力，把录音后的处理链路从 Gemini
   desktop.caf
   mic.caf
   audio.m4a
+  {YYYY-MM-DD_HHmm}-{meeting-title}.m4a
   metadata.json
   upload.log
   feishu_minutes.json
@@ -76,6 +77,7 @@ Recorder1 保留这些本地录音能力，把录音后的处理链路从 Gemini
 | `desktop.caf` | 原始系统声音，录制过程中持续写入。 |
 | `mic.caf` | 原始麦克风声音，录制过程中持续写入。 |
 | `audio.m4a` | 最终立体声文件，左声道为系统声音，右声道为麦克风。 |
+| `{YYYY-MM-DD_HHmm}-{meeting-title}.m4a` | 上传到飞书的命名副本，用于让云空间和妙记显示可读会议名。 |
 | `metadata.json` | 会议信息、本地路径、上传状态、飞书 token、音频质量、采集完整性和麦克风设备信息。 |
 | `upload.log` | 本地上传和采集日志。 |
 | `feishu_minutes.json` | 飞书云空间、飞书妙记和纪要接口返回结果。 |
@@ -178,7 +180,8 @@ Recorder1 当前支持这些设置：
 
 ```text
 audio.m4a
-  -> lark-cli drive +upload --as user --file audio.m4a --json
+  -> 命名上传副本
+  -> lark-cli drive +upload --as user --file <YYYY-MM-DD_HHmm-meeting-title.m4a> --json
   -> file_token
   -> lark-cli minutes +upload --as user --file-token <file_token> --json
   -> minute_url
@@ -325,7 +328,7 @@ metadata.json
 
 ## 隐私说明
 
-Recorder1 会把录音和元数据保存在 `~/Documents/Recorder1`。如果开启自动上传，`audio.m4a` 会通过当前用户本机的 `lark-cli` 会话上传。App 本身不内置飞书凭据或 API token。
+Recorder1 会把录音和元数据保存在 `~/Documents/Recorder1`。如果开启自动上传，系统会先生成一个会议命名的 `audio.m4a` 副本，再通过当前用户本机的 `lark-cli` 会话上传。App 本身不内置飞书凭据或 API token。
 
 `metadata.json` 和 `upload.log` 可能包含会议标题、本地路径、飞书文件 token 和妙记链接。请把录音目录视为私有数据。
 

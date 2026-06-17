@@ -302,7 +302,7 @@ struct RecorderPanel: View {
                         .keyboardShortcut("r", modifiers: [.command])
 
                         Button {
-                            model.startRecording(meeting: nil)
+                            model.startRecording(meeting: nil, matchCurrentMeeting: false)
                         } label: {
                             Image(systemName: "record.circle")
                                 .frame(width: 22, height: 20)

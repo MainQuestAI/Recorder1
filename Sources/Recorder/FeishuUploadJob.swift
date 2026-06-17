@@ -9,7 +9,41 @@ struct FeishuUploadJob: Equatable {
     let endedAt: Date
 
     var audioRelativePath: String {
-        audioURL.lastPathComponent
+        uploadFileName
+    }
+
+    var uploadFileName: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+
+        let title = meetingTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+            .map(Meeting.sanitize) ?? "Recorder1"
+
+        return "\(formatter.string(from: startedAt))-\(title).m4a"
+    }
+
+    func prepareAudioForUpload() throws -> URL {
+        let uploadURL = folderURL.appendingPathComponent(uploadFileName)
+        if uploadURL.standardizedFileURL == audioURL.standardizedFileURL {
+            return audioURL
+        }
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: uploadURL.path) {
+            try fm.removeItem(at: uploadURL)
+        }
+        try fm.copyItem(at: audioURL, to: uploadURL)
+        return uploadURL
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

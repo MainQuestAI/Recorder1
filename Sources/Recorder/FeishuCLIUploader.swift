@@ -7,11 +7,13 @@ struct FeishuCLIUploader {
 
     func upload(job: FeishuUploadJob) async throws -> FeishuUploadResult {
         let executable = try CLIProcessRunner.resolveLarkCLI(configuredPath: cliPath)
+        let uploadAudioURL = try job.prepareAudioForUpload()
         UploadStatusStore.markUploading(job: job)
+        UploadStatusStore.appendLog(folderURL: job.folderURL, "Prepared upload file: \(uploadAudioURL.lastPathComponent)")
 
         let driveResult = try await runLogged(
             executable: executable,
-            arguments: ["drive", "+upload", "--as", "user", "--file", job.audioRelativePath, "--json"],
+            arguments: ["drive", "+upload", "--as", "user", "--file", uploadAudioURL.lastPathComponent, "--json"],
             job: job,
             label: "drive +upload"
         )

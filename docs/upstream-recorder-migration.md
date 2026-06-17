@@ -56,10 +56,10 @@ The goal is to avoid maintaining two transcript backends in the MVP. Feishu Minu
 
 Recorder1 adds a `lark-cli` based upload flow:
 
-1. Upload `audio.m4a` to Feishu Drive:
+1. Copy `audio.m4a` to a meeting-named `.m4a` file, then upload that file to Feishu Drive:
 
    ```bash
-   lark-cli drive +upload --as user --file audio.m4a --json
+   lark-cli drive +upload --as user --file <YYYY-MM-DD_HHmm-meeting-title.m4a> --json
    ```
 
 2. Create a Feishu Minute from the Drive file:

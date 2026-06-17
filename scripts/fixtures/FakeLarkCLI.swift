@@ -45,24 +45,31 @@ let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
 switch command {
 case "drive +upload":
     let file = value(after: "--file", in: rest) ?? ""
-    guard file == "audio.m4a" else {
-        exitWithError("expected --file audio.m4a, got: \(file)", code: 11)
+    guard file.hasSuffix(".m4a") else {
+        exitWithError("expected an m4a upload file, got: \(file)", code: 11)
     }
     guard fm.fileExists(atPath: cwd.appendingPathComponent(file).path) else {
-        exitWithError("audio.m4a missing in working directory", code: 12)
+        exitWithError("\(file) missing in working directory", code: 12)
+    }
+    if file != "audio.m4a" {
+        let source = cwd.appendingPathComponent("audio.m4a")
+        let upload = cwd.appendingPathComponent(file)
+        guard (try? Data(contentsOf: source)) == (try? Data(contentsOf: upload)) else {
+            exitWithError("upload copy does not match audio.m4a", code: 13)
+        }
     }
     let failOnce = cwd.appendingPathComponent("fail-drive-once")
     if fm.fileExists(atPath: failOnce.path) {
         try? fm.removeItem(at: failOnce)
         exitWithError("forced drive upload failure", code: 23)
     }
-    writeStderr("Uploading: audio.m4a (probe) -> Drive root folder")
+    writeStderr("Uploading: \(file) (probe) -> Drive root folder")
     print("""
     {
       "ok": true,
       "identity": "user",
       "data": {
-        "file_name": "audio.m4a",
+        "file_name": "\(file)",
         "file_token": "fake-file-token",
         "size": 31,
         "url": "https://my.feishu.cn/file/fake-file-token",

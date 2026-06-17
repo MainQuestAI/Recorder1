@@ -174,7 +174,7 @@ final class RecorderModel {
 
     // MARK: - Recording control
 
-    func startRecording(meeting: Meeting?) {
+    func startRecording(meeting: Meeting?, matchCurrentMeeting: Bool = true) {
         guard state == .idle, !preparingToRecord else { return }
         preparingToRecord = true
         statusMessage = text("status.checkingMic")
@@ -190,7 +190,11 @@ final class RecorderModel {
             }
             self.refreshInputDevices()
             self.preparingToRecord = false
-            self.beginRecording(meeting: meeting)
+            let resolvedMeeting = meeting ?? (matchCurrentMeeting ? self.calendar.currentMeeting(Date()) : nil)
+            if resolvedMeeting != nil {
+                self.refreshMeetings()
+            }
+            self.beginRecording(meeting: resolvedMeeting)
         }
     }
 

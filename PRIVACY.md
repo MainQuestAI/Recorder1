@@ -16,6 +16,7 @@ A recording folder can contain:
 desktop.caf
 mic.caf
 audio.m4a
+{YYYY-MM-DD_HHmm}-{meeting-title}.m4a
 metadata.json
 upload.log
 feishu_minutes.json
@@ -26,13 +27,14 @@ minutes/
 
 ## When Audio Is Uploaded
 
-Recorder1 uploads `audio.m4a` only when upload is enabled or when the user manually retries or confirms upload.
+Recorder1 prepares a meeting-named copy of `audio.m4a` and uploads that copy only when upload is enabled or when the user manually retries or confirms upload.
 
 The upload flow is:
 
-1. Upload `audio.m4a` to Feishu Drive.
-2. Create a Feishu Minute from the Drive file.
-3. Optionally fetch Feishu Minutes notes and artifacts.
+1. Copy `audio.m4a` to a meeting-named `.m4a` file.
+2. Upload the meeting-named `.m4a` file to Feishu Drive.
+3. Create a Feishu Minute from the Drive file.
+4. Optionally fetch Feishu Minutes notes and artifacts.
 
 If capture integrity detects that system audio is missing while microphone audio is present, Recorder1 can block automatic upload and ask the user to confirm.
 

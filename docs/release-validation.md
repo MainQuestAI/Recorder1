@@ -10,7 +10,7 @@ Recorder1 is a macOS menu-bar recorder that captures:
 - microphone input audio,
 - a stereo `audio.m4a` mix where system audio is left and microphone audio is right.
 
-After recording, it can upload `audio.m4a` through the user's local `lark-cli` session, create a Feishu Minute, fetch available note artifacts, and store local metadata and logs.
+After recording, it can upload a meeting-named copy of `audio.m4a` through the user's local `lark-cli` session, create a Feishu Minute, fetch available note artifacts, and store local metadata and logs.
 
 ## Validated MVP Capabilities
 

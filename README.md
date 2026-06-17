@@ -59,6 +59,7 @@ Recordings are written under:
   desktop.caf
   mic.caf
   audio.m4a
+  {YYYY-MM-DD_HHmm}-{meeting-title}.m4a
   metadata.json
   upload.log
   feishu_minutes.json
@@ -73,6 +74,7 @@ File roles:
 | `desktop.caf` | Raw mono system audio, flushed during recording. |
 | `mic.caf` | Raw mono microphone audio, flushed during recording. |
 | `audio.m4a` | Final stereo AAC mix. Left = system audio, right = microphone. |
+| `{YYYY-MM-DD_HHmm}-{meeting-title}.m4a` | Upload copy used so Feishu Drive and Feishu Minutes show a useful meeting name. |
 | `metadata.json` | Meeting metadata, local paths, upload status, Feishu tokens, audio quality, capture integrity, and selected microphone device. |
 | `upload.log` | Local upload and capture log. |
 | `feishu_minutes.json` | Combined Feishu Drive, Minutes, and notes API output. |
@@ -177,7 +179,8 @@ Recorder1 includes settings for:
 
 ```text
 audio.m4a
-  -> lark-cli drive +upload --as user --file audio.m4a --json
+  -> named upload copy
+  -> lark-cli drive +upload --as user --file <YYYY-MM-DD_HHmm-meeting-title.m4a> --json
   -> file_token
   -> lark-cli minutes +upload --as user --file-token <file_token> --json
   -> minute_url
@@ -323,7 +326,7 @@ Then use Retry Upload from the menu-bar panel after fixing `lark-cli` login, pat
 
 ## Privacy Notes
 
-Recorder1 stores recordings and metadata locally under `~/Documents/Recorder1`. If auto upload is enabled, `audio.m4a` is uploaded through the user's local `lark-cli` session. The app does not embed Feishu credentials or API tokens.
+Recorder1 stores recordings and metadata locally under `~/Documents/Recorder1`. If auto upload is enabled, a meeting-named copy of `audio.m4a` is uploaded through the user's local `lark-cli` session. The app does not embed Feishu credentials or API tokens.
 
 `metadata.json` and `upload.log` can contain meeting titles, local file paths, Feishu file tokens, and minute URLs. Treat recording folders as private data.
 

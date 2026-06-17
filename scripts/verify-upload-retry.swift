@@ -92,6 +92,10 @@ struct UploadRetryProbe {
         try require(result.minuteToken == "fake-minute-token", "retry did not return fake minute token")
         let audioAfterRetry = try Data(contentsOf: audioURL)
         try require(audioAfterRetry == originalAudio, "audio.m4a changed after retry")
+        let uploadCopyURL = folderURL.appendingPathComponent(job.uploadFileName)
+        try requireFile(uploadCopyURL, "named upload copy missing after retry")
+        let uploadCopy = try Data(contentsOf: uploadCopyURL)
+        try require(uploadCopy == originalAudio, "named upload copy does not match audio.m4a")
 
         guard let uploadedMetadata = UploadStatusStore.readMetadata(folderURL: folderURL) else {
             throw ProbeError.failed("metadata.json missing after retry")
@@ -111,9 +115,10 @@ struct UploadRetryProbe {
             contentsOf: folderURL.appendingPathComponent("fake-lark-invocations.log"),
             encoding: .utf8
         )
+        let expectedUploadArg = "--file \(job.uploadFileName)"
         let driveCalls = invocations
             .split(separator: "\n")
-            .filter { $0.contains("drive +upload") && $0.contains("--file audio.m4a") }
-        try require(driveCalls.count == 2, "expected two drive uploads using relative audio.m4a, saw \(driveCalls.count)")
+            .filter { $0.contains("drive +upload") && $0.contains(expectedUploadArg) }
+        try require(driveCalls.count == 2, "expected two drive uploads using \(job.uploadFileName), saw \(driveCalls.count)")
     }
 }
