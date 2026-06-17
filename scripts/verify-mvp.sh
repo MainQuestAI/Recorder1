@@ -117,8 +117,8 @@ else
   fail "LSUIElement is not true"
 fi
 
-if [[ "$(read_plist_raw CFBundleIdentifier "$APP_PLIST")" == "com.dingcheng.MeetingCapture" ]]; then
-  pass "bundle id is com.dingcheng.MeetingCapture"
+if [[ "$(read_plist_raw CFBundleIdentifier "$APP_PLIST")" == "com.dingcheng.Recorder1" ]]; then
+  pass "bundle id is com.dingcheng.Recorder1"
 else
   fail "bundle id mismatch"
 fi
@@ -134,7 +134,7 @@ run_step "codesign verify" codesign --verify --deep --strict "$APP"
 printf '\n==> macOS permission check\n'
 TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
 if [[ -r "$TCC_DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
-  TCC_ROWS="$(sqlite3 "$TCC_DB" "select service || '=' || auth_value from access where client='com.dingcheng.MeetingCapture';" 2>/dev/null || true)"
+  TCC_ROWS="$(sqlite3 "$TCC_DB" "select service || '=' || auth_value from access where client='com.dingcheng.Recorder1';" 2>/dev/null || true)"
   MIC_OK=false
   AUDIO_OK=false
   CALENDAR_OK=false
