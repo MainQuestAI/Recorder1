@@ -50,9 +50,6 @@ printf 'APPL????' > "$CONTENTS/PkgInfo"
 if [ "$IDENTITY" = "-" ]; then
     echo "==> codesign (ad-hoc, non-sandboxed entitlements)"
     SIGNING_OPTIONS=()
-elif [ "$IDENTITY" = "Meeting Capture Local Code Signing" ]; then
-    echo "==> codesign (\"$IDENTITY\", non-sandboxed entitlements)"
-    SIGNING_OPTIONS=()
 else
     echo "==> codesign (\"$IDENTITY\", non-sandboxed entitlements)"
     SIGNING_OPTIONS=(--options runtime)

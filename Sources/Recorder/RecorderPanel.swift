@@ -240,6 +240,7 @@ struct RecorderPanel: View {
         case .idle:
             switch model.uploadState {
             case .idle: return "Ready"
+            case .needsConfirmation: return "Audio incomplete"
             case .running: return "Uploading"
             case .uploaded: return "Uploaded"
             case .failed: return "Upload failed"
@@ -254,6 +255,7 @@ struct RecorderPanel: View {
         case .idle:
             switch model.uploadState {
             case .idle: return "circle"
+            case .needsConfirmation: return "exclamationmark.triangle.fill"
             case .running: return "arrow.up.circle.fill"
             case .uploaded: return "checkmark.circle.fill"
             case .failed: return "exclamationmark.triangle.fill"
@@ -268,6 +270,7 @@ struct RecorderPanel: View {
         case .idle:
             switch model.uploadState {
             case .idle: return MQTheme.textMuted
+            case .needsConfirmation: return MQTheme.warning
             case .running: return MQTheme.info
             case .uploaded: return MQTheme.success
             case .failed: return MQTheme.warning
@@ -381,6 +384,39 @@ struct RecorderPanel: View {
         switch model.uploadState {
         case .idle:
             EmptyView()
+
+        case .needsConfirmation(let message):
+            MQCard(spacing: 8) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(MQTheme.warning)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(MQTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                HStack(spacing: 8) {
+                    Button {
+                        model.confirmUploadDespiteDegradedAudio()
+                    } label: {
+                        Label("Upload Anyway", systemImage: "arrow.up.circle")
+                    }
+                    .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.warning), compact: true))
+
+                    Button {
+                        model.revealLastUploadFolder()
+                    } label: {
+                        Image(systemName: "folder")
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(MQButtonStyle(kind: .icon, compact: true))
+                    .help("Reveal recording folder")
+
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
 
         case .running:
             MQCard {

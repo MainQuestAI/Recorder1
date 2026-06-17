@@ -15,6 +15,8 @@ struct RecordingMetadata: Codable, Equatable {
     var uploadStatus: String
     var lastError: String?
     var audioQuality: AudioQualityReport?
+    var systemAudioCapture: SystemAudioCaptureMetadata?
+    var captureIntegrity: CaptureIntegrity?
     var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -32,6 +34,8 @@ struct RecordingMetadata: Codable, Equatable {
         case uploadStatus = "upload_status"
         case lastError = "last_error"
         case audioQuality = "audio_quality"
+        case systemAudioCapture = "system_audio_capture"
+        case captureIntegrity = "capture_integrity"
         case updatedAt = "updated_at"
     }
 }
@@ -56,6 +60,8 @@ enum UploadStatusStore {
             uploadStatus: "recording",
             lastError: nil,
             audioQuality: nil,
+            systemAudioCapture: nil,
+            captureIntegrity: nil,
             updatedAt: Date()
         )
         write(metadata, folderURL: session.folderURL)
@@ -92,6 +98,72 @@ enum UploadStatusStore {
         for warning in report.warnings {
             appendLog(folderURL: folderURL, "Audio quality warning: \(warning)")
         }
+    }
+
+    static func markSystemAudioCapture(folderURL: URL, metadata capture: SystemAudioCaptureMetadata?) {
+        guard let capture else { return }
+        update(folderURL: folderURL) { metadata in
+            if let existing = metadata.systemAudioCapture {
+                var merged = capture
+                merged.routeChanges = existing.routeChanges + capture.routeChanges
+                if existing.systemAudioCaptureFailed {
+                    merged.systemAudioCaptureFailed = true
+                    merged.lastFailureReason = existing.lastFailureReason ?? merged.lastFailureReason
+                }
+                metadata.systemAudioCapture = merged
+            } else {
+                metadata.systemAudioCapture = capture
+            }
+        }
+        if let config = capture.config, let device = capture.device {
+            appendLog(
+                folderURL: folderURL,
+                "System audio capture: tap=\(config.tapKind.rawValue) device_role=\(config.deviceRole.rawValue) device=\(device.name) uid=\(device.uid)"
+            )
+        }
+        for event in capture.fallbackEvents {
+            appendLog(folderURL: folderURL, "System audio fallback: \(event)")
+        }
+    }
+
+    static func markCaptureIntegrity(folderURL: URL, integrity: CaptureIntegrity) {
+        update(folderURL: folderURL) { metadata in
+            metadata.captureIntegrity = integrity
+            if integrity.recordingAcceptance == "degraded" {
+                metadata.uploadStatus = "degraded"
+                metadata.lastError = integrity.issues.joined(separator: " ")
+            }
+        }
+        if integrity.recordingAcceptance == "degraded" {
+            appendLog(folderURL: folderURL, "Recording acceptance degraded: \(integrity.issues.joined(separator: " "))")
+        } else {
+            appendLog(folderURL: folderURL, "Recording acceptance passed.")
+        }
+    }
+
+    static func markRouteChanged(folderURL: URL, event: SystemAudioRouteChangeEvent) {
+        update(folderURL: folderURL) { metadata in
+            var capture = metadata.systemAudioCapture ?? .empty
+            capture.routeChanges.append(event)
+            metadata.systemAudioCapture = capture
+        }
+        let before = event.before.map { "\($0.name) uid=\($0.uid)" } ?? "unknown"
+        let after = event.after.map { "\($0.name) uid=\($0.uid)" } ?? "unknown"
+        appendLog(folderURL: folderURL, "route_changed reason=\(event.reason) before=\(before) after=\(after)")
+    }
+
+    static func markSystemAudioCaptureFailed(folderURL: URL, reason: String) {
+        update(folderURL: folderURL) { metadata in
+            var capture = metadata.systemAudioCapture ?? .empty
+            capture.systemAudioCaptureFailed = true
+            capture.lastFailureReason = reason
+            metadata.systemAudioCapture = capture
+            if metadata.uploadStatus == "recording" || metadata.uploadStatus == "saved" {
+                metadata.uploadStatus = "system_audio_capture_failed"
+            }
+            metadata.lastError = reason
+        }
+        appendLog(folderURL: folderURL, "system_audio_capture_failed: \(reason)")
     }
 
     static func markCaptureFailed(session: RecordingSession, meeting: Meeting?, error: Error) {
@@ -218,6 +290,8 @@ enum UploadStatusStore {
             uploadStatus: "unknown",
             lastError: nil,
             audioQuality: nil,
+            systemAudioCapture: nil,
+            captureIntegrity: nil,
             updatedAt: Date()
         )
     }

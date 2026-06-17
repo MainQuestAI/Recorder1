@@ -4,7 +4,7 @@
 
 Meeting Capture 的 MVP 主链路已经完成：菜单栏应用可启动，Gemini 已移除，Feishu CLI 上传链路已接入并通过真实上传验证，MainQuest 黑色版菜单栏 UI 已完成。
 
-当前唯一阻塞是系统输出音频采样：Core Audio Tap 有回调、有帧数，但 macOS 返回的样本全为 0。因此 `audio.m4a` 目前可以包含麦克风声音，也可以被飞书妙记接受，但还不能证明已经包含远端会议声音。
+系统输出音频全 0 的根因已收窄并完成工程兜底：当前机器上 global tap / device-bound tap 会返回全 0，但同一签名 app 下的 process mixdown tap 可以拿到非零系统音频。生产录音现在按 `global -> device_bound -> process_mixdown` 自动降级，并且本地音频验收已证明 `desktop.caf` 和 `audio.m4a` 左声道都有系统输出音频。
 
 ## 已完成范围
 
@@ -53,35 +53,54 @@ Meeting Capture 的 MVP 主链路已经完成：菜单栏应用可启动，Gemin
   - 真实上传已成功拿到 `file_token`
   - 真实生成妙记已成功拿到 `minute_url`
   - `vc +notes` 已成功返回转写文件
+- 系统音频验收：
+  - 签名验收构建不是 ad-hoc
+  - `--diagnose-system-audio-matrix` 中 `process_afplay` / `process_running_mixdown` / `process_all_mixdown` 均为 `ok=true`
+  - `--diagnose-audio-capture-acceptance` 通过
+  - `desktop.caf` RMS 约 `-15.5dB`
+  - `audio.m4a` 左声道 RMS 约 `-15.5dB`
 
-## 当前阻塞
-
-系统输出音频仍为空样本。
+## 系统音频诊断结论
 
 最终诊断命令：
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-output /tmp/meeting-capture-system-audio-final.json
+MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio-matrix --diagnose-output /tmp/meeting-capture-system-audio-matrix.json
 ```
 
-诊断结果：
+核心结果：
 
-```json
-{
-  "frameCount": 260096,
-  "ok": false,
-  "peakDB": -120,
-  "rmsDB": -120,
-  "sampleRate": 48000
-}
-```
+- `global` tap：回调和帧数正常，但样本仍为 `-120dB`。
+- `device_bound` tap：回调和帧数正常，但样本仍为 `-120dB`。
+- `process_afplay`：`ok=true`，RMS 约 `-15dB`。
+- `process_running_mixdown`：`ok=true`，RMS 约 `-15dB`。
+- `process_all_mixdown`：`ok=true`，RMS 约 `-15dB`。
 
 解释：
 
-- `frameCount` 有值，说明 Core Audio 回调正常。
-- `rmsDB=-120` 和 `peakDB=-120`，说明 macOS 交给应用的系统音频样本全为 0。
-- 代码侧已尝试从全局 Tap 切到默认输出设备绑定 Tap，结果仍为空。
-- 当前高概率原因是 macOS 26 的签名 / TCC 信任链限制：系统设置里显示已授权，但 Core Audio Tap 仍可能返回空样本。
+- 签名 / TCC / Core Audio Tap 基础权限已经成立。
+- 设备选择不是主因，`defaultOutputDevice` 和 `defaultSystemOutputDevice` 在本机测试中可相同，也都能进入进程级 tap。
+- 当前 macOS 26 环境下，系统级 global / device-bound 混音路径会给空样本；进程级 mixdown 路径可用。
+- 因此生产录音保留 global 优先，但如果静音会自动切到 device-bound，再切到 process mixdown。
+
+录音验收命令：
+
+```bash
+MeetingCapture.app/Contents/MacOS/Recorder --diagnose-audio-capture-acceptance --diagnose-output /tmp/meeting-capture-audio-capture-acceptance.json
+```
+
+验收结果：
+
+```json
+{
+  "ok": true,
+  "rmsDB": -15.455,
+  "peakDB": -12.041,
+  "audioLeftRMSDB": -15.462,
+  "audioLeftPeakDB": -11.852,
+  "sampleRate": 48000
+}
+```
 
 ## 不建议继续反复做的事
 
@@ -93,27 +112,19 @@ MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio --diagnose-ou
 
 ## 建议下一步
 
-1. 做一次稳定签名收口。
-   - 使用受信任的 Apple Development / Developer ID 证书签名。
-   - 或者由用户明确确认一次本地证书信任。
-   - 签名稳定后重新触发系统音频授权。
-
-2. 重新跑系统音频诊断。
-   - 目标结果：`ok=true`，`rmsDB` 明显高于 `-80dB`。
-
-3. 做真实会议验收。
+1. 做真实会议验收。
    - Zoom
    - 飞书会议
    - 腾讯会议
    - Teams
    - Google Meet
 
-4. 做设备路由验收。
+2. 做设备路由验收。
    - 外放
    - 有线耳机
    - AirPods / 蓝牙耳机
 
-5. 做 30 分钟连续录制。
+3. 做 30 分钟连续录制。
    - 验收命令：
 
 ```bash
@@ -122,4 +133,4 @@ bash scripts/analyze-latest-audio.sh 1800
 
 ## 当前产品状态
 
-产品主体可以继续迭代和演示 Feishu 上传链路；完整会议录音验收仍卡在系统输出音频进入 `audio.m4a` 这一项。
+产品主体可以继续迭代和演示 Feishu 上传链路；本地系统音频已经能进入 `desktop.caf` 和 `audio.m4a` 左声道。剩余验收是会议软件、耳机/外放路由和 30 分钟连续录制。

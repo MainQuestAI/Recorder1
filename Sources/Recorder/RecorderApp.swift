@@ -9,6 +9,12 @@ struct RecorderApp: App {
         if CommandLine.arguments.contains("--diagnose-system-audio") {
             SystemAudioDiagnostics.runAndExit()
         }
+        if CommandLine.arguments.contains("--diagnose-audio-capture-acceptance") {
+            SystemAudioDiagnostics.runRecordingAcceptanceAndExit()
+        }
+        if CommandLine.arguments.contains("--diagnose-system-audio-matrix") {
+            SystemAudioMatrixDiagnostics.runAndExit()
+        }
     }
 
     var body: some Scene {
@@ -31,6 +37,7 @@ struct RecorderApp: App {
         case .idle:
             switch model.uploadState {
             case .idle: return "mic.fill"
+            case .needsConfirmation: return "exclamationmark.triangle.fill"
             case .running: return "arrow.up.circle.fill"
             case .uploaded: return "checkmark.circle.fill"
             case .failed: return "exclamationmark.triangle.fill"

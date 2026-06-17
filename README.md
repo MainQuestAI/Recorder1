@@ -70,6 +70,13 @@ CODESIGN_KEYCHAIN="/path/to/signing.keychain-db" \
 
 Stable signing matters because macOS ties microphone, system-audio capture, and calendar grants to the app's signing identity. Ad-hoc builds can require repeated permission approval and may cause Core Audio taps to deliver zero-filled system-audio buffers on macOS 26.
 
+For system-audio acceptance builds, use the strict signing helper. It refuses ad-hoc signing and writes `signing-report.txt`.
+
+```bash
+CODESIGN_IDENTITY="Apple Development: you@example.com" \
+bash scripts/build-for-audio-capture-acceptance.sh
+```
+
 ## MVP Self-Check
 
 ```bash
@@ -92,13 +99,23 @@ bash scripts/analyze-latest-audio.sh 1800
 
 The strict check requires both stereo channels to contain measurable audio. In the mixed file, left is desktop/system audio and right is microphone audio.
 
-System-audio diagnostic:
+System-audio matrix diagnostic:
 
 ```bash
-MeetingCapture.app/Contents/MacOS/Recorder --diagnose-system-audio
+MeetingCapture.app/Contents/MacOS/Recorder \
+  --diagnose-system-audio-matrix \
+  --diagnose-output /tmp/meeting-capture-system-audio-matrix.json
 ```
 
-This plays a short local sound and records the desktop channel through the same Core Audio tap used by the app. A passing result has `ok: true`; `rmsDB: -120` and `peakDB: -120` means macOS returned silent buffers.
+This tests global tap, device-bound tap, and process-mixdown tap variants under the app's real signing identity. On macOS 26, global/device taps may return silent buffers while process mixdown succeeds.
+
+Strict local audio-capture acceptance:
+
+```bash
+bash scripts/verify-audio-capture-acceptance.sh
+```
+
+This fails if the app is ad-hoc signed, if no `defaultOutputDevice` probe succeeds, if `desktop.caf` is silent, or if the mixed `audio.m4a` left channel is silent.
 
 ## Feishu CLI Flow
 

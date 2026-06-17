@@ -14,6 +14,8 @@ enum RecorderState: Equatable {
 /// Post-save Feishu upload progress, surfaced in the panel.
 enum UploadState: Equatable {
     case idle
+    /// Saved audio is likely incomplete; user must confirm before upload.
+    case needsConfirmation(String)
     case running
     /// Feishu Minutes URL.
     case uploaded(URL)
@@ -31,11 +33,19 @@ struct CaptureResult {
     var sampleRate: Double
     /// number of audio frames written.
     var frameCount: AVAudioFramePosition
+    /// Optional desktop/system-audio capture metadata. Mic captures leave this nil.
+    var systemAudio: SystemAudioCaptureMetadata?
 
-    init(firstHostTime: UInt64? = nil, sampleRate: Double = 0, frameCount: AVAudioFramePosition = 0) {
+    init(
+        firstHostTime: UInt64? = nil,
+        sampleRate: Double = 0,
+        frameCount: AVAudioFramePosition = 0,
+        systemAudio: SystemAudioCaptureMetadata? = nil
+    ) {
         self.firstHostTime = firstHostTime
         self.sampleRate = sampleRate
         self.frameCount = frameCount
+        self.systemAudio = systemAudio
     }
 }
 

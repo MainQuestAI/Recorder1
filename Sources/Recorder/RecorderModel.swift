@@ -115,6 +115,19 @@ final class RecorderModel {
                 self?.statusMessage = "Desktop audio error: \(error.localizedDescription)"
             }
         }
+        tap.onRouteChanged = { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self, let session = self.currentSession else { return }
+                UploadStatusStore.markRouteChanged(folderURL: session.folderURL, event: event)
+            }
+        }
+        tap.onCaptureFailed = { [weak self] reason in
+            DispatchQueue.main.async {
+                guard let self, let session = self.currentSession else { return }
+                UploadStatusStore.markSystemAudioCaptureFailed(folderURL: session.folderURL, reason: reason)
+                self.statusMessage = "System audio capture is silent."
+            }
+        }
         mic.onFatalError = { [weak self] error in
             DispatchQueue.main.async {
                 self?.statusMessage = "Mic error: \(error.localizedDescription)"
@@ -295,11 +308,19 @@ final class RecorderModel {
                         endedAt: endedAt
                     )
                     UploadStatusStore.markSaved(job: job)
+                    UploadStatusStore.markSystemAudioCapture(folderURL: folderURL, metadata: desktopResult.systemAudio)
                     if let audioQuality {
                         UploadStatusStore.markAudioQuality(folderURL: folderURL, report: audioQuality)
                     }
+                    let integrity = audioQuality.map { RecorderModel.captureIntegrity(for: $0) } ?? .passed()
+                    UploadStatusStore.markCaptureIntegrity(folderURL: folderURL, integrity: integrity)
                     self.lastUploadJob = job
-                    if self.autoUploadAfterSave {
+                    if integrity.requiresUploadConfirmation {
+                        self.uploadState = .needsConfirmation(
+                            "只录到麦克风，没有录到系统/会议远端声音，是否仍要上传？"
+                        )
+                        self.statusMessage = "Saved \(outputURL.lastPathComponent) · system audio missing"
+                    } else if self.autoUploadAfterSave {
                         self.statusMessage = "Saved \(outputURL.lastPathComponent)"
                         self.startUpload(job)
                     } else {
@@ -406,6 +427,15 @@ final class RecorderModel {
             statusMessage = "No saved audio.m4a to upload."
             return
         }
+        startUpload(job)
+    }
+
+    func confirmUploadDespiteDegradedAudio() {
+        guard let job = lastUploadJob else {
+            statusMessage = "No saved audio.m4a to upload."
+            return
+        }
+        UploadStatusStore.appendLog(folderURL: job.folderURL, "User confirmed upload despite degraded recording acceptance.")
         startUpload(job)
     }
 
@@ -543,5 +573,16 @@ final class RecorderModel {
             return "Network error: \(ns.localizedDescription)"
         }
         return error.localizedDescription
+    }
+
+    private static func captureIntegrity(for report: AudioQualityReport) -> CaptureIntegrity {
+        let leftSilent = report.leftDesktopRMSDB < -80 && report.leftDesktopPeakDB < -60
+        let micActive = report.rightMicRMSDB > -80 || report.rightMicPeakDB > -60
+        if leftSilent && micActive {
+            return .degraded(issues: [
+                "Only microphone channel looks active; desktop/system channel is silent."
+            ])
+        }
+        return .passed()
     }
 }

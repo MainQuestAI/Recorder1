@@ -20,6 +20,7 @@ xcuserdata/
 Recordings/
 *.caf
 *.m4a
+signing-report.txt
 
 # Icon build scratch (icon.swift + Recorder.icns are committed; these are regenerable)
 icon-work/

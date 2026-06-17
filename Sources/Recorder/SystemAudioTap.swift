@@ -31,6 +31,10 @@ final class SystemAudioTap {
     var onLevelDB: ((Float) -> Void)?
     /// Called on an arbitrary thread on a fatal, unrecoverable error.
     var onFatalError: ((Error) -> Void)?
+    /// Called when the default output route changes while recording.
+    var onRouteChanged: ((SystemAudioRouteChangeEvent) -> Void)?
+    /// Called when callbacks keep firing but the desktop/system channel stays silent.
+    var onCaptureFailed: ((String) -> Void)?
 
     // MARK: - Errors
 
@@ -80,6 +84,15 @@ final class SystemAudioTap {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
     private var tapUUID = UUID()
+    private var activeConfig = SystemAudioCaptureConfig(
+        tapKind: .global,
+        deviceRole: .defaultOutput,
+        includeSubDevice: true
+    )
+    private var currentDevice: SystemAudioDeviceSnapshot?
+    private var currentTapFormat: SystemAudioTapFormatSummary?
+    private var fallbackEvents: [String] = []
+    private var captureFailureNotified = false
 
     /// The destination file. Stays open across watchdog rebuilds; finalized only on `stop()`.
     private var file: AVAudioFile?
@@ -127,9 +140,13 @@ final class SystemAudioTap {
 
     private var watchdogTimer: DispatchSourceTimer?
     private let watchdogQueue = DispatchQueue(label: "systemaudiotap.watchdog")
+    private let routeListenerQueue = DispatchQueue(label: "systemaudiotap.route-listener")
     /// If output is audibly running but the tap delivers ~silence for this long, rebuild.
     private let watchdogSilenceThreshold: TimeInterval = 3.0
+    private let fallbackSilenceThreshold: TimeInterval = 1.5
     private var rebuilding = false
+    private var defaultOutputListenerBlock: AudioObjectPropertyListenerBlock?
+    private var defaultSystemOutputListenerBlock: AudioObjectPropertyListenerBlock?
 
     // Throttle the meter callback to ~15 Hz.
     private var lastMeterPostHostTime: UInt64 = 0
@@ -162,6 +179,15 @@ final class SystemAudioTap {
         tapUUID = UUID()
         firstHostTime = nil
         capturedFrames = 0
+        activeConfig = SystemAudioCaptureConfig(
+            tapKind: .global,
+            deviceRole: .defaultOutput,
+            includeSubDevice: true
+        )
+        currentDevice = nil
+        currentTapFormat = nil
+        fallbackEvents = []
+        captureFailureNotified = false
 
         // 1) Build tap + aggregate and read the tap format.
         let built = try buildTapAndAggregateLocked()
@@ -233,6 +259,7 @@ final class SystemAudioTap {
         let now = mach_absolute_time()
         lastLoudHostTime.withLock { $0 = now }
         lastCallbackHostTime.withLock { $0 = now }
+        installRouteListeners()
         startWatchdog()
     }
 
@@ -244,6 +271,7 @@ final class SystemAudioTap {
     /// Stop the IOProc, destroy the aggregate + tap, finalize the file.
     func stop() -> CaptureResult {
         stopWatchdog()
+        removeRouteListeners()
 
         lock.lock()
         defer { lock.unlock() }
@@ -252,7 +280,8 @@ final class SystemAudioTap {
             return CaptureResult(
                 firstHostTime: firstHostTime,
                 sampleRate: capturedSampleRate,
-                frameCount: capturedFrames
+                frameCount: capturedFrames,
+                systemAudio: captureMetadataLocked()
             )
         }
         started = false
@@ -280,7 +309,8 @@ final class SystemAudioTap {
         return CaptureResult(
             firstHostTime: firstHostTime,
             sampleRate: capturedSampleRate,
-            frameCount: capturedFrames
+            frameCount: capturedFrames,
+            systemAudio: captureMetadataLocked()
         )
     }
 
@@ -295,23 +325,44 @@ final class SystemAudioTap {
     /// error is thrown.
     @discardableResult
     private func buildTapAndAggregateLocked() throws -> BuildResult {
-        // --- 1. Default system output device + its UID. ---
+        // --- 1. Resolve the output device. Prefer Default Output; keep Default System Output as fallback. ---
+        var config = activeConfig
         let outputDevice: AudioObjectID
         do {
-            outputDevice = try Self.defaultSystemOutputDevice()
+            outputDevice = try Self.outputDevice(role: config.deviceRole)
         } catch {
-            throw error
+            if config.deviceRole == .defaultOutput {
+                fallbackEvents.append("default_output_device_unavailable; using default_system_output_device")
+                config.deviceRole = .defaultSystemOutput
+                activeConfig = config
+                outputDevice = try Self.outputDevice(role: config.deviceRole)
+            } else {
+                throw error
+            }
         }
 
-        let outputUID: String
-        do {
-            outputUID = try Self.deviceUID(outputDevice)
-        } catch {
-            throw error
-        }
+        let outputUID = try Self.deviceUID(outputDevice)
+        let outputSnapshot = try Self.deviceSnapshot(deviceID: outputDevice)
+        currentDevice = outputSnapshot
 
-        // --- 2. Process tap: current output device mix, passthrough, private. ---
-        let desc = CATapDescription(__excludingProcesses: [], andDeviceUID: outputUID, withStream: 0)
+        // --- 2. Process tap: global first; watchdog may switch to device-bound if it stays silent. ---
+        let desc: CATapDescription
+        switch config.tapKind {
+        case .global:
+            desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+        case .deviceBound:
+            desc = CATapDescription(__excludingProcesses: [], andDeviceUID: outputUID, withStream: 0)
+        case .processMixdown:
+            let processes = try Self.audioProcessObjects(
+                excludingCurrentProcess: false,
+                runningOutputOnly: false
+            )
+            guard !processes.isEmpty else {
+                throw TapError.createTapFailed(kAudioHardwareBadObjectError)
+            }
+            fallbackEvents.append("process_mixdown_target_count=\(processes.count)")
+            desc = CATapDescription(stereoMixdownOfProcesses: processes)
+        }
         desc.uuid = tapUUID
         desc.name = "Meeting Capture System Audio"
         desc.muteBehavior = .unmuted   // passthrough: the user still hears their audio
@@ -330,19 +381,13 @@ final class SystemAudioTap {
         // --- 3. Private, tap-only aggregate device. Output = master (drift comp off); tap in the
         //        tap-list with drift compensation on. The mic is NOT part of this aggregate. ---
         let aggregateUID = UUID().uuidString
-        let aggregateDescription: [String: Any] = [
+        var aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Recorder System Tap",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [
-                [
-                    kAudioSubDeviceUIDKey: outputUID,
-                    kAudioSubDeviceDriftCompensationKey: 0
-                ]
-            ],
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapUIDKey: tapUUID.uuidString,
@@ -351,6 +396,14 @@ final class SystemAudioTap {
                 ]
             ]
         ]
+        if config.includeSubDevice {
+            aggregateDescription[kAudioAggregateDeviceSubDeviceListKey] = [
+                [
+                    kAudioSubDeviceUIDKey: outputUID,
+                    kAudioSubDeviceDriftCompensationKey: 0
+                ]
+            ]
+        }
 
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
         let aggStatus = AudioHardwareCreateAggregateDevice(
@@ -367,6 +420,7 @@ final class SystemAudioTap {
         let format: AVAudioFormat
         do {
             format = try Self.tapStreamFormat(newTapID)
+            currentTapFormat = Self.tapFormatSummary(format)
         } catch {
             AudioHardwareDestroyAggregateDevice(newAggregateID)
             self.aggregateID = kAudioObjectUnknown
@@ -603,6 +657,7 @@ final class SystemAudioTap {
         lock.lock()
         let isRunning = started && !rebuilding
         let outDevice = lock_currentOutputDeviceLocked()
+        let config = activeConfig
         lock.unlock()
         guard isRunning else { return }
 
@@ -615,20 +670,52 @@ final class SystemAudioTap {
         let elapsedNanos = Self.hostTimeToNanos(now &- lastLoud)
         let elapsedSeconds = Double(elapsedNanos) / 1_000_000_000.0
 
+        if config.tapKind == .global, elapsedSeconds >= fallbackSilenceThreshold {
+            lock.lock()
+            if activeConfig.tapKind == .global {
+                fallbackEvents.append("global_tap_silent_after_\(String(format: "%.1f", elapsedSeconds))s; switching_to_device_bound")
+                activeConfig.tapKind = .deviceBound
+            }
+            lock.unlock()
+            rebuildTapAndAggregate(reason: "global_tap_silent_fallback")
+            return
+        }
+
+        if config.tapKind == .deviceBound, elapsedSeconds >= fallbackSilenceThreshold {
+            lock.lock()
+            if activeConfig.tapKind == .deviceBound {
+                fallbackEvents.append("device_bound_tap_silent_after_\(String(format: "%.1f", elapsedSeconds))s; switching_to_process_mixdown")
+                activeConfig.tapKind = .processMixdown
+            }
+            lock.unlock()
+            rebuildTapAndAggregate(reason: "device_bound_tap_silent_fallback")
+            return
+        }
+
         if elapsedSeconds >= watchdogSilenceThreshold {
-            rebuildTapAndAggregate()
+            rebuildTapAndAggregate(reason: "watchdog_silence_rebuild")
+            var shouldNotify = false
+            lock.lock()
+            if activeConfig.tapKind == .processMixdown, !captureFailureNotified {
+                captureFailureNotified = true
+                shouldNotify = true
+            }
+            lock.unlock()
+            if shouldNotify {
+                onCaptureFailed?("Core Audio callbacks are active but system audio samples remain silent.")
+            }
         }
     }
 
     /// Read the current default output device (caller holds `lock`; just a convenience wrapper that
     /// swallows errors so the watchdog stays quiet).
     private func lock_currentOutputDeviceLocked() -> AudioObjectID? {
-        return try? Self.defaultSystemOutputDevice()
+        return try? Self.outputDevice(role: activeConfig.deviceRole)
     }
 
     /// Tear down and rebuild BOTH the tap and the aggregate, reinstall the IOProc, and keep writing
     /// to the SAME file. Rebuilding only one is insufficient per the regression report.
-    private func rebuildTapAndAggregate() {
+    private func rebuildTapAndAggregate(reason: String) {
         lock.lock()
 
         guard started, !rebuilding else {
@@ -644,6 +731,7 @@ final class SystemAudioTap {
         tapUUID = UUID()
 
         do {
+            fallbackEvents.append("rebuild_started: \(reason)")
             let built = try buildTapAndAggregateLocked()
             // Keep writing in the original write format; only update the realtime wrap format /
             // sample rate if the tap renegotiated. Note: if the sample rate changed we keep the
@@ -678,12 +766,119 @@ final class SystemAudioTap {
         lock.unlock()
     }
 
+    private func installRouteListeners() {
+        removeRouteListeners()
+
+        var defaultOutputAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultOutputBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleRouteChanged(reason: "default_output_device_changed")
+        }
+        if AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultOutputAddress,
+            routeListenerQueue,
+            defaultOutputBlock
+        ) == noErr {
+            defaultOutputListenerBlock = defaultOutputBlock
+        }
+
+        var defaultSystemAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultSystemBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleRouteChanged(reason: "default_system_output_device_changed")
+        }
+        if AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultSystemAddress,
+            routeListenerQueue,
+            defaultSystemBlock
+        ) == noErr {
+            defaultSystemOutputListenerBlock = defaultSystemBlock
+        }
+    }
+
+    private func removeRouteListeners() {
+        if let defaultOutputListenerBlock {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                routeListenerQueue,
+                defaultOutputListenerBlock
+            )
+        }
+        defaultOutputListenerBlock = nil
+
+        if let defaultSystemOutputListenerBlock {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                routeListenerQueue,
+                defaultSystemOutputListenerBlock
+            )
+        }
+        defaultSystemOutputListenerBlock = nil
+    }
+
+    private func handleRouteChanged(reason: String) {
+        lock.lock()
+        let shouldRebuild = started && !rebuilding
+        let before = currentDevice
+        let after = try? Self.deviceSnapshot(deviceID: Self.outputDevice(role: activeConfig.deviceRole))
+        lock.unlock()
+
+        let event = SystemAudioRouteChangeEvent(
+            at: Date(),
+            reason: reason,
+            before: before,
+            after: after
+        )
+        onRouteChanged?(event)
+
+        if shouldRebuild {
+            rebuildTapAndAggregate(reason: reason)
+        }
+    }
+
+    private func captureMetadataLocked() -> SystemAudioCaptureMetadata {
+        SystemAudioCaptureMetadata(
+            config: activeConfig,
+            device: currentDevice,
+            tapFormat: currentTapFormat,
+            fallbackEvents: fallbackEvents,
+            routeChanges: [],
+            systemAudioCaptureFailed: captureFailureNotified,
+            lastFailureReason: captureFailureNotified
+                ? "Core Audio callbacks are active but system audio samples remain silent."
+                : nil
+        )
+    }
+
     // MARK: - Core Audio property helpers
 
-    /// Read the default system output device ID.
-    private static func defaultSystemOutputDevice() throws -> AudioObjectID {
+    /// Read the requested output device ID.
+    static func outputDevice(role: SystemAudioDeviceRole) throws -> AudioObjectID {
+        let selector: AudioObjectPropertySelector = role == .defaultOutput
+            ? kAudioHardwarePropertyDefaultOutputDevice
+            : kAudioHardwarePropertyDefaultSystemOutputDevice
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
@@ -700,7 +895,7 @@ final class SystemAudioTap {
     }
 
     /// Read a device's UID string.
-    private static func deviceUID(_ deviceID: AudioObjectID) throws -> String {
+    static func deviceUID(_ deviceID: AudioObjectID) throws -> String {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -716,8 +911,45 @@ final class SystemAudioTap {
         return uid as String
     }
 
+    static func deviceName(_ deviceID: AudioObjectID) throws -> String {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfName: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &cfName)
+        guard status == noErr, let name = cfName?.takeRetainedValue() else {
+            return "Unknown Audio Device"
+        }
+        return name as String
+    }
+
+    static func nominalSampleRate(_ deviceID: AudioObjectID) -> Double {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var sampleRate = Float64(0)
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &sampleRate)
+        return status == noErr ? sampleRate : 0
+    }
+
+    static func deviceSnapshot(deviceID: AudioObjectID) throws -> SystemAudioDeviceSnapshot {
+        SystemAudioDeviceSnapshot(
+            id: UInt32(deviceID),
+            uid: try deviceUID(deviceID),
+            name: try deviceName(deviceID),
+            sampleRate: nominalSampleRate(deviceID),
+            isRunningSomewhere: deviceIsRunningSomewhere(deviceID)
+        )
+    }
+
     /// Read `kAudioTapPropertyFormat` ('tfmt') and build an `AVAudioFormat`.
-    private static func tapStreamFormat(_ tapID: AudioObjectID) throws -> AVAudioFormat {
+    static func tapStreamFormat(_ tapID: AudioObjectID) throws -> AVAudioFormat {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioTapPropertyFormat,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -736,8 +968,17 @@ final class SystemAudioTap {
         return format
     }
 
+    static func tapFormatSummary(_ format: AVAudioFormat) -> SystemAudioTapFormatSummary {
+        SystemAudioTapFormatSummary(
+            sampleRate: format.sampleRate,
+            channelCount: Int(format.channelCount),
+            isInterleaved: format.isInterleaved,
+            commonFormat: String(describing: format.commonFormat)
+        )
+    }
+
     /// Is the device currently running an IO stream somewhere on the system?
-    private static func deviceIsRunningSomewhere(_ deviceID: AudioObjectID) -> Bool {
+    static func deviceIsRunningSomewhere(_ deviceID: AudioObjectID) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -748,5 +989,67 @@ final class SystemAudioTap {
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &running)
         guard status == noErr else { return false }
         return running != 0
+    }
+
+    static func audioProcessObjects(excludingCurrentProcess: Bool, runningOutputOnly: Bool) throws -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize
+        )
+        guard status == noErr, dataSize >= UInt32(MemoryLayout<AudioObjectID>.size) else {
+            return []
+        }
+
+        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var processObjects = [AudioObjectID](repeating: kAudioObjectUnknown, count: count)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &processObjects
+        )
+        guard status == noErr else { return [] }
+
+        let currentPID = pid_t(ProcessInfo.processInfo.processIdentifier)
+        return processObjects.filter { processObject in
+            processObject != kAudioObjectUnknown
+                && (!excludingCurrentProcess || Self.processPID(processObject) != currentPID)
+                && (!runningOutputOnly || Self.processIsRunningOutput(processObject))
+        }
+    }
+
+    private static func processIsRunningOutput(_ processObject: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningOutput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(processObject, &address, 0, nil, &size, &running)
+        return status == noErr && running != 0
+    }
+
+    private static func processPID(_ processObject: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var pid = pid_t(0)
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        let status = AudioObjectGetPropertyData(processObject, &address, 0, nil, &size, &pid)
+        return status == noErr ? pid : nil
     }
 }
