@@ -96,7 +96,7 @@ final class SystemAudioTap {
 
     /// The destination file. Stays open across watchdog rebuilds; finalized only on `stop()`.
     private var file: AVAudioFile?
-    /// The processing format we write to disk (MONO Float32 at the tap's sample rate).
+    /// The processing format we write to disk (MONO Float32 at the output device's sample rate).
     private var writeFormat: AVAudioFormat?
     /// The format the tap actually delivers in the IOProc (used to wrap the incoming buffer list).
     private var tapFormat: AVAudioFormat?
@@ -107,6 +107,7 @@ final class SystemAudioTap {
     // Accumulated capture result.
     private var firstHostTime: UInt64?
     private var capturedSampleRate: Double = 0
+    private var capturedSampleRateSource: String?
     /// Frames actually written to disk. Updated ONLY by the writer thread during
     /// a session; read by `stop()` after the writer has been joined.
     private var capturedFrames: AVAudioFramePosition = 0
@@ -188,14 +189,17 @@ final class SystemAudioTap {
         currentTapFormat = nil
         fallbackEvents = []
         captureFailureNotified = false
+        capturedSampleRateSource = nil
 
         // 1) Build tap + aggregate and read the tap format.
         let built = try buildTapAndAggregateLocked()
 
-        // 2) Open the destination file MONO Float32 at the tap's sample rate.
+        // 2) Open the destination file MONO Float32 at the output device's sample rate.
+        // Bluetooth headsets in call mode can report a 48 kHz tap format while the hardware clock
+        // is actually 24 kHz. Writing at the tap rate labels the CAF twice as fast.
         guard let writeFmt = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: built.tapFormat.sampleRate,
+            sampleRate: built.captureSampleRate,
             channels: 1,
             interleaved: false
         ) else {
@@ -228,7 +232,8 @@ final class SystemAudioTap {
 
         self.writeFormat = writeFmt
         self.tapFormat = built.tapFormat
-        self.capturedSampleRate = built.tapFormat.sampleRate
+        self.capturedSampleRate = built.captureSampleRate
+        self.capturedSampleRateSource = built.captureSampleRateSource
 
         // 3) Spin up the off-realtime writer (ring + drain thread) BEFORE the
         //    IOProc starts producing. ~4 s of mono float headroom; the IOProc
@@ -318,6 +323,8 @@ final class SystemAudioTap {
 
     private struct BuildResult {
         var tapFormat: AVAudioFormat
+        var captureSampleRate: Double
+        var captureSampleRateSource: String
     }
 
     /// Create the process tap and the private tap-only aggregate device, and read the tap format.
@@ -429,7 +436,18 @@ final class SystemAudioTap {
             throw error
         }
 
-        return BuildResult(tapFormat: format)
+        let captureRate = Self.captureSampleRate(tapFormat: format, outputDevice: outputSnapshot)
+        if abs(format.sampleRate - captureRate.sampleRate) > 1 {
+            fallbackEvents.append(
+                "sample_rate_mismatch tap=\(Int(format.sampleRate))Hz output_device=\(Int(outputSnapshot.sampleRate))Hz writing=\(Int(captureRate.sampleRate))Hz"
+            )
+        }
+
+        return BuildResult(
+            tapFormat: format,
+            captureSampleRate: captureRate.sampleRate,
+            captureSampleRateSource: captureRate.source
+        )
     }
 
     /// Install the IOProc on the aggregate and start it. Caller MUST hold `lock`. Uses the current
@@ -742,10 +760,12 @@ final class SystemAudioTap {
             if writeFormat == nil {
                 self.writeFormat = AVAudioFormat(
                     commonFormat: .pcmFormatFloat32,
-                    sampleRate: built.tapFormat.sampleRate,
+                    sampleRate: built.captureSampleRate,
                     channels: 1,
                     interleaved: false
                 )
+                self.capturedSampleRate = built.captureSampleRate
+                self.capturedSampleRateSource = built.captureSampleRateSource
             }
             try installIOProcAndStartLocked()
         } catch {
@@ -861,6 +881,8 @@ final class SystemAudioTap {
             config: activeConfig,
             device: currentDevice,
             tapFormat: currentTapFormat,
+            captureSampleRate: capturedSampleRate > 0 ? capturedSampleRate : nil,
+            captureSampleRateSource: capturedSampleRateSource,
             fallbackEvents: fallbackEvents,
             routeChanges: [],
             systemAudioCaptureFailed: captureFailureNotified,
@@ -946,6 +968,17 @@ final class SystemAudioTap {
             sampleRate: nominalSampleRate(deviceID),
             isRunningSomewhere: deviceIsRunningSomewhere(deviceID)
         )
+    }
+
+    static func captureSampleRate(
+        tapFormat: AVAudioFormat,
+        outputDevice: SystemAudioDeviceSnapshot
+    ) -> (sampleRate: Double, source: String) {
+        let deviceRate = outputDevice.sampleRate
+        if deviceRate >= 8_000, deviceRate <= 384_000 {
+            return (deviceRate, "output_device_nominal")
+        }
+        return (tapFormat.sampleRate, "tap_format")
     }
 
     /// Read `kAudioTapPropertyFormat` ('tfmt') and build an `AVAudioFormat`.

@@ -71,6 +71,8 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
     var config: SystemAudioCaptureConfig?
     var device: SystemAudioDeviceSnapshot?
     var tapFormat: SystemAudioTapFormatSummary?
+    var captureSampleRate: Double?
+    var captureSampleRateSource: String?
     var fallbackEvents: [String]
     var routeChanges: [SystemAudioRouteChangeEvent]
     var systemAudioCaptureFailed: Bool
@@ -80,6 +82,8 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
         case config
         case device
         case tapFormat = "tap_format"
+        case captureSampleRate = "capture_sample_rate"
+        case captureSampleRateSource = "capture_sample_rate_source"
         case fallbackEvents = "fallback_events"
         case routeChanges = "route_changes"
         case systemAudioCaptureFailed = "system_audio_capture_failed"
@@ -91,6 +95,8 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
             config: nil,
             device: nil,
             tapFormat: nil,
+            captureSampleRate: nil,
+            captureSampleRateSource: nil,
             fallbackEvents: [],
             routeChanges: [],
             systemAudioCaptureFailed: false,

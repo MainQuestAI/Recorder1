@@ -119,9 +119,12 @@ enum UploadStatusStore {
             }
         }
         if let config = capture.config, let device = capture.device {
+            let sampleRateInfo = capture.captureSampleRate.map {
+                " capture_sample_rate=\(Int($0)) source=\(capture.captureSampleRateSource ?? "unknown")"
+            } ?? ""
             appendLog(
                 folderURL: folderURL,
-                "System audio capture: tap=\(config.tapKind.rawValue) device_role=\(config.deviceRole.rawValue) device=\(device.name) uid=\(device.uid)"
+                "System audio capture: tap=\(config.tapKind.rawValue) device_role=\(config.deviceRole.rawValue) device=\(device.name) uid=\(device.uid)\(sampleRateInfo)"
             )
         }
         for event in capture.fallbackEvents {
