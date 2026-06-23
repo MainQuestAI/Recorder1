@@ -34,9 +34,10 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.silenceThresholdDB) }
     }
 
-    /// Whether silence auto-stop is active at all. Default true.
+    /// Whether silence auto-stop is active at all. Default false because false positives
+    /// can end a real meeting recording.
     static var silenceAutoStop: Bool {
-        get { defaults.object(forKey: Key.silenceAutoStop) == nil ? true : defaults.bool(forKey: Key.silenceAutoStop) }
+        get { defaults.object(forKey: Key.silenceAutoStop) == nil ? false : defaults.bool(forKey: Key.silenceAutoStop) }
         set { defaults.set(newValue, forKey: Key.silenceAutoStop) }
     }
 

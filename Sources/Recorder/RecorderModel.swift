@@ -31,7 +31,7 @@ final class RecorderModel {
         didSet { Preferences.silenceThresholdDB = silenceThresholdDB }
     }
     /// Whether silence auto-stop runs at all.
-    var silenceAutoStopEnabled: Bool = true {
+    var silenceAutoStopEnabled: Bool = false {
         didSet { Preferences.silenceAutoStop = silenceAutoStopEnabled }
     }
     /// Empty means auto-resolve lark-cli from known Homebrew/npm locations and PATH.
@@ -252,6 +252,12 @@ final class RecorderModel {
                 timeout: silenceTimeout,
                 onTimeout: { [weak self] in
                     // onTimeout is invoked on MAIN per contract.
+                    if let self, let session = self.currentSession {
+                        UploadStatusStore.appendLog(
+                            folderURL: session.folderURL,
+                            String(format: "Auto-stopped after %.0f seconds below %.0f dB silence threshold.", self.silenceTimeout, self.silenceThresholdDB)
+                        )
+                    }
                     self?.saveAndStop()
                 }
             )
@@ -275,14 +281,15 @@ final class RecorderModel {
             }
         }
 
-        // Start both captures.
+        // Start the mic first so Bluetooth headsets settle into call-mode sample
+        // rates before the system-audio tap opens its CAF file.
         do {
-            try tap.start(writingTo: session.desktopURL)
             try mic.start(
                 writingTo: session.micURL,
                 preferredInputDeviceUID: preferredInputDeviceUID.isEmpty ? nil : preferredInputDeviceUID
             )
             UploadStatusStore.markMicrophoneInput(folderURL: session.folderURL, device: mic.activeInputDevice)
+            try tap.start(writingTo: session.desktopURL)
         } catch {
             statusMessage = text("status.captureStartFailed", describeCaptureError(error))
             _ = tap.stop()
