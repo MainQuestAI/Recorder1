@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct FeishuUploadJob: Equatable {
     let audioURL: URL
@@ -60,6 +61,16 @@ struct FeishuUploadJob: Equatable {
         }
         try fm.copyItem(at: audioURL, to: uploadURL)
         return uploadURL
+    }
+
+    func audioFingerprint() throws -> String {
+        let handle = try FileHandle(forReadingFrom: audioURL)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            digest.update(data: data)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

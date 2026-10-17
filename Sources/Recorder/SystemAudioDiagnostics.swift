@@ -3,6 +3,30 @@ import AudioToolbox
 import Foundation
 
 enum SystemAudioDiagnostics {
+    @MainActor
+    static func runUploadGateAndExit() -> Never {
+        guard let index = CommandLine.arguments.firstIndex(of: "--diagnose-folder"),
+              CommandLine.arguments.indices.contains(index + 1) else { exit(2) }
+        let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+        Task { @MainActor in
+            let model = RecorderModel()
+            model.uploadExisting(RecordingEntry(folderURL: folder, title: "Integrity gate verification", date: Date(),
+                audioURL: folder.appendingPathComponent("audio.m4a"), transcriptURL: nil, minuteURL: nil, uploadStatus: "failed"))
+            for _ in 0..<300 {
+                if case .needsConfirmation = model.uploadState {
+                    print("PASS library upload is blocked by recording integrity before any CLI upload")
+                    exit(0)
+                }
+                if case .failed(let error) = model.uploadState { fputs("FAIL \(error)\n", stderr); exit(1) }
+                if case .uploaded = model.uploadState { fputs("FAIL integrity gate was bypassed\n", stderr); exit(1) }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            fputs("FAIL upload gate timed out\n", stderr)
+            exit(1)
+        }
+        dispatchMain()
+    }
+
     private struct Result: Encodable {
         var ok: Bool
         var desktopURL: String
@@ -21,6 +45,8 @@ enum SystemAudioDiagnostics {
         var systemAudioCaptureFailed: Bool?
         var systemAudioLastFailureReason: String?
         var error: String?
+        var audioQuality: AudioQualityReport? = nil
+        var integrity: CaptureIntegrity? = nil
 
         enum CodingKeys: String, CodingKey {
             case ok
@@ -40,6 +66,8 @@ enum SystemAudioDiagnostics {
             case systemAudioCaptureFailed = "system_audio_capture_failed"
             case systemAudioLastFailureReason = "system_audio_last_failure_reason"
             case error
+            case audioQuality = "audio_quality"
+            case integrity
         }
     }
 
@@ -165,6 +193,9 @@ enum SystemAudioDiagnostics {
         try tap.start(writingTo: desktopURL)
         try mic.start(writingTo: micURL)
 
+        let continuity = CommandLine.arguments.contains("--diagnose-continuity")
+        let started = Date()
+        if continuity { Thread.sleep(forTimeInterval: 12) }
         usleep(500_000)
         let player = try? playDiagnosticTone(in: folder)
         let afplay = try? playAfplayTone(in: folder)
@@ -183,6 +214,26 @@ enum SystemAudioDiagnostics {
         }
         player?.stop()
 
+        if continuity {
+            let arguments = CommandLine.arguments
+            let durationIndex = arguments.firstIndex(of: "--diagnose-duration")
+            let duration = durationIndex.flatMap { index in
+                arguments.indices.contains(index + 1) ? Double(arguments[index + 1]) : nil
+            } ?? 90
+            tap.setPaused(true)
+            mic.setPaused(true)
+            Thread.sleep(forTimeInterval: 4)
+            tap.setPaused(false)
+            mic.setPaused(false)
+            while Date().timeIntervalSince(started) < max(40, duration) {
+                // Each cycle opens a NEW audio process after silence, exercising dynamic process
+                // coverage rather than only capturing sources that existed when recording began.
+                Thread.sleep(forTimeInterval: 6)
+                let latePlayer = try playAfplayTone(in: folder)
+                Thread.sleep(forTimeInterval: 3)
+                if latePlayer.isRunning { latePlayer.terminate(); latePlayer.waitUntilExit() }
+            }
+        }
         let desktopCapture = tap.stop()
         let micCapture = mic.stop()
         try StereoMixer.mix(
@@ -194,9 +245,10 @@ enum SystemAudioDiagnostics {
         )
 
         let desktopLevels = try analyzeMonoAudio(url: desktopURL)
-        let audioQuality = try AudioQualityAnalyzer.analyze(audioURL: audioURL, activeThresholdDB: -80)
-        let ok = (desktopLevels.rmsDB > -80 || desktopLevels.peakDB > -60)
-            && (audioQuality.leftDesktopRMSDB > -80 || audioQuality.leftDesktopPeakDB > -60)
+        let audioQuality = try AudioQualityAnalyzer.analyze(audioURL: audioURL)
+        let integrity = RecordingAcceptance.evaluate(quality: audioQuality, capture: desktopCapture.systemAudio,
+                                                      desktop: desktopCapture, microphone: micCapture)
+        let ok = !integrity.requiresUploadConfirmation
 
         return Result(
             ok: ok,
@@ -215,7 +267,9 @@ enum SystemAudioDiagnostics {
             systemAudioFallbackEvents: desktopCapture.systemAudio?.fallbackEvents ?? [],
             systemAudioCaptureFailed: desktopCapture.systemAudio?.systemAudioCaptureFailed,
             systemAudioLastFailureReason: desktopCapture.systemAudio?.lastFailureReason,
-            error: nil
+            error: nil,
+            audioQuality: audioQuality,
+            integrity: integrity
         )
     }
 

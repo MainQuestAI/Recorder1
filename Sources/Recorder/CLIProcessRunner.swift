@@ -31,6 +31,33 @@ enum CLIProcessError: LocalizedError {
     case commandFailed(command: String, exitCode: Int32, stdout: String, stderr: String)
     case timedOut(command: String, seconds: TimeInterval)
 
+    var apiError: [String: Any]? {
+        guard case .commandFailed(_, _, let stdout, let stderr) = self else { return nil }
+        for text in [stderr, stdout] {
+            if let json = try? FeishuMinutesParser.parseJSON(from: text) as? [String: Any],
+               let error = json["error"] as? [String: Any] { return error }
+        }
+        return nil
+    }
+
+    var briefDescription: String {
+        if let error = apiError {
+            if error["type"] as? String == "network" {
+                return "网络连接中断，本地录音已保留。"
+            }
+            let message = error["message"] as? String ?? "飞书请求失败"
+            let code = (error["code"] as? NSNumber).map { "（\($0)）" } ?? ""
+            return message + code
+        }
+        switch self {
+        case .timedOut(_, let seconds): return "请求在 \(Int(seconds)) 秒后超时，本地录音已保留。"
+        case .binaryNotFound: return "找不到飞书 CLI，请检查设置中的路径。"
+        case .commandFailed(_, let code, let stdout, let stderr):
+            let detail = stderr.isEmpty ? stdout : stderr
+            return "飞书 CLI 返回错误 \(code)：\(detail.prefix(240))"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .binaryNotFound(let path):
@@ -47,7 +74,7 @@ enum CLIProcessError: LocalizedError {
 }
 
 struct CLIProcessRunner {
-    var timeoutSeconds: TimeInterval = 3600
+    var timeoutSeconds: TimeInterval = 300
 
     func run(
         executable: CLIExecutable,
@@ -71,7 +98,7 @@ struct CLIProcessRunner {
             guard FileManager.default.isExecutableFile(atPath: url.path) else {
                 throw CLIProcessError.binaryNotFound(url.path)
             }
-            return CLIExecutable(url: url, prefixArguments: [])
+            return nativeExecutable(url)
         }
 
         let candidates = [
@@ -81,10 +108,27 @@ struct CLIProcessRunner {
             "\(NSHomeDirectory())/.local/bin/lark-cli",
         ]
         if let match = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return CLIExecutable(url: URL(fileURLWithPath: match), prefixArguments: [])
+            return nativeExecutable(URL(fileURLWithPath: match))
         }
 
         return CLIExecutable(url: URL(fileURLWithPath: "/usr/bin/env"), prefixArguments: ["lark-cli"])
+    }
+
+    private static func nativeExecutable(_ url: URL) -> CLIExecutable {
+        let resolved = url.resolvingSymlinksInPath()
+        let package = resolved.deletingLastPathComponent().deletingLastPathComponent()
+        // The npm shim spawns the native CLI. Execute the native child directly so timeouts
+        // terminate the request itself rather than leaving an orphan uploader running.
+        if resolved.lastPathComponent == "run.js",
+           let data = try? Data(contentsOf: package.appendingPathComponent("package.json")),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           json["name"] as? String == "@larksuite/cli" {
+            let native = package.appendingPathComponent("bin/lark-cli")
+            if FileManager.default.isExecutableFile(atPath: native.path) {
+                return CLIExecutable(url: native, prefixArguments: [])
+            }
+        }
+        return CLIExecutable(url: url, prefixArguments: [])
     }
 
     static func processEnvironment() -> [String: String] {
@@ -104,6 +148,15 @@ struct CLIProcessRunner {
         } else {
             environment["PATH"] = standardPath
         }
+
+        // Feishu is reachable directly from the user's network. Do not let a
+        // stale local VPN/proxy setting (for example HTTP_PROXY=127.0.0.1:7890)
+        // make lark-cli depend on a running proxy. lark-cli supports this
+        // switch for disabling proxy use while keeping the parent app's
+        // environment unchanged.
+        environment["LARK_CLI_NO_PROXY"] = "1"
+        environment["LARKSUITE_CLI_NO_UPDATE_NOTIFIER"] = "1"
+        environment["LARKSUITE_CLI_NO_SKILLS_NOTIFIER"] = "1"
         return environment
     }
 }
@@ -159,6 +212,10 @@ private func runBlocking(
 
     if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
         process.terminate()
+        if semaphore.wait(timeout: .now() + 2) == .timedOut {
+            kill(process.processIdentifier, SIGKILL)
+            _ = semaphore.wait(timeout: .now() + 2)
+        }
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
         throw CLIProcessError.timedOut(command: resultForError.commandLine, seconds: timeoutSeconds)

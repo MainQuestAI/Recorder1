@@ -26,5 +26,8 @@ jobs:
       - name: Verify upload retry with fake CLI
         run: bash scripts/verify-upload-retry.sh
 
+      - name: Verify audio integrity acceptance
+        run: bash scripts/verify-audio-integrity.sh
+
       - name: Verify retention cleanup
         run: bash scripts/verify-retention-cleanup.sh

@@ -83,6 +83,10 @@ if not desktop_ok:
     raise SystemExit("FAIL desktop.caf is silent")
 if not left_ok:
     raise SystemExit("FAIL audio.m4a left channel is silent")
+if data.get("system_audio_capture_failed") is True:
+    raise SystemExit("FAIL capture reported an error")
+if data.get("integrity", {}).get("recording_acceptance") != "passed":
+    raise SystemExit("FAIL recording integrity did not pass")
 
 print("PASS desktop.caf RMS/peak is non-silent")
 print("PASS audio.m4a left channel RMS/peak is non-silent")

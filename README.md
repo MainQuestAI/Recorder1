@@ -42,11 +42,11 @@ See [docs/upstream-recorder-migration.md](docs/upstream-recorder-migration.md) f
   - `lark-cli drive +upload`
   - `lark-cli minutes +upload`
   - optional `lark-cli vc +notes`
-- Retry upload without re-recording.
+- Resume uploads from existing Drive files and Minutes, with up to three attempts for known transient failures.
 - Local `metadata.json`, `upload.log`, Feishu JSON, transcript, and summary files.
 - Audio-quality analysis after mixing.
-- Degraded-capture guard that can block automatic upload when only the microphone channel was captured.
-- Output-route change logging and system-audio tap rebuild.
+- Recording review for sparse system audio, capture errors, failed analysis, and mismatched track durations, also enforced for library uploads and retries.
+- Keep taps running through silence and recover system/microphone capture after output-route or sample-rate changes.
 - Chinese and English UI.
 - Optional local cleanup after successful upload: keep forever, delete after 15 days, or delete after 30 days.
 
@@ -88,11 +88,11 @@ File roles:
 - `lark-cli` installed and logged in as a Feishu/Lark user.
 - Feishu/Lark permissions for the user running `lark-cli`:
   - `drive:file:upload`
+  - `drive:drive.metadata:readonly`
   - `minutes:minutes.upload:write`
   - `vc:note:read`
   - `minutes:minutes:readonly`
   - `minutes:minutes.artifacts:read`
-  - `minutes:minutes.transcript:export`
 
 The app auto-detects `lark-cli` from common Homebrew/npm locations and `PATH`. A custom binary path can be set in Settings.
 
@@ -103,7 +103,7 @@ The app auto-detects `lark-cli` from common Homebrew/npm locations and `PATH`. A
 open ./Recorder1.app
 ```
 
-The build script defaults to ad-hoc signing so unattended local builds do not hang on Keychain prompts.
+The build script defaults to ad-hoc signing so unattended local builds do not hang on Keychain prompts. Set `SDKROOT=/path/to/MacOSX.sdk` when selecting a compatible installed SDK explicitly.
 
 For stable macOS permissions across rebuilds, sign with a trusted certificate:
 
@@ -190,9 +190,13 @@ audio.m4a
 
 Feishu Minutes generation is asynchronous. Recorder1 retries `vc +notes` for a short period when the CLI reports that the minute is not ready.
 
-Upload failures do not delete local recordings. The app records the error in `upload.log`, keeps `audio.m4a`, and lets the user retry the upload.
+Recorder1 sets `LARK_CLI_NO_PROXY=1` for its `lark-cli` child process so Feishu requests use the direct network path instead of inheriting a stale local VPN/proxy setting such as `HTTP_PROXY=127.0.0.1:7890`. This does not change the system proxy configuration. If the current network requires a proxy, run `lark-cli` directly or add an app-level proxy option later.
+
+Upload failures do not delete local recordings. The app records the error in `upload.log`, keeps `audio.m4a`, and lets the user retry the upload. If a creation request times out or loses its response, its outcome may be unknown; retries stop until the cloud result is checked to avoid duplicate files or Minutes.
 
 ## Verification
+
+See the [audio and upload repair validation record](docs/repair-validation-2026-10-17.md) for regression commands, observed native results, and remaining checks.
 
 Run the MVP self-check:
 
@@ -230,7 +234,7 @@ Strict local audio-capture acceptance:
 bash scripts/verify-audio-capture-acceptance.sh
 ```
 
-This fails if the app is ad-hoc signed, if no default-output probe succeeds, if `desktop.caf` is silent, or if the mixed `audio.m4a` left channel is silent.
+This fails if the app is ad-hoc signed, if no default-output probe succeeds, if `desktop.caf` is silent, if the mixed `audio.m4a` left channel is silent, or if capture errors or the shared recording-integrity gate reject the result.
 
 ## Architecture
 
@@ -300,7 +304,7 @@ Run the matrix diagnostic under the installed app identity:
   --diagnose-output /tmp/recorder1-system-audio-matrix.json
 ```
 
-On some macOS 26 systems, global and device-bound Core Audio taps can return silent buffers while process mixdown works. Recorder1 records the selected tap mode in `metadata.json`.
+On some macOS 26 systems, global and device-bound Core Audio taps can return silent buffers while process mixdown works. The matrix diagnostic compares these modes. Recording keeps global all-process coverage and does not switch to a process snapshot merely because samples are silent; it records the selected mode in `metadata.json`.
 
 ### Upload fails
 

@@ -6,6 +6,14 @@ The format follows the spirit of [Keep a Changelog](https://keepachangelog.com/e
 
 ## Unreleased
 
+### Fixed
+
+- Keep system audio taps running through silence; bound callback-stall recovery instead of repeatedly rebuilding on quiet PCM.
+- Recover microphone capture after audio-engine configuration changes, resample rate changes, and preserve short capture gaps in both tracks.
+- Require recording review for sparse system audio, capture errors, analysis failures, and mismatched track durations, including library uploads and retries.
+- Resume Feishu uploads from durable file/Minute checkpoints, retry known transient failures with a bounded backoff, and stop replaying creation requests whose outcome is unknown.
+- Run the native Feishu CLI directly, bypass inherited proxy settings, and terminate timed-out uploads.
+
 ### Added
 
 - macOS menu-bar recorder derived from upstream `tobi/recorder`.

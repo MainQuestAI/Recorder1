@@ -77,6 +77,8 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
     var routeChanges: [SystemAudioRouteChangeEvent]
     var systemAudioCaptureFailed: Bool
     var lastFailureReason: String?
+    var droppedFrames: Int? = nil
+    var insertedSilenceFrames: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case config
@@ -88,6 +90,8 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
         case routeChanges = "route_changes"
         case systemAudioCaptureFailed = "system_audio_capture_failed"
         case lastFailureReason = "last_failure_reason"
+        case droppedFrames = "dropped_frames"
+        case insertedSilenceFrames = "inserted_silence_frames"
     }
 
     static var empty: SystemAudioCaptureMetadata {

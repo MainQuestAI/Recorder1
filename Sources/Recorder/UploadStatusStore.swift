@@ -22,6 +22,9 @@ struct RecordingMetadata: Codable, Equatable {
     var captureIntegrity: CaptureIntegrity?
     var microphoneInput: AudioInputDeviceInfo?
     var updatedAt: Date
+    var uploadStage: String? = nil
+    var uploadAudioSHA256: String? = nil
+    var microphoneCaptureFailure: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case meetingTitle = "meeting_title"
@@ -45,6 +48,9 @@ struct RecordingMetadata: Codable, Equatable {
         case captureIntegrity = "capture_integrity"
         case microphoneInput = "microphone_input"
         case updatedAt = "updated_at"
+        case uploadStage = "upload_stage"
+        case uploadAudioSHA256 = "upload_audio_sha256"
+        case microphoneCaptureFailure = "microphone_capture_failure"
     }
 }
 
@@ -155,6 +161,11 @@ enum UploadStatusStore {
         )
     }
 
+    static func markMicrophoneFailure(folderURL: URL, reason: String) {
+        update(folderURL: folderURL) { $0.microphoneCaptureFailure = reason }
+        appendLog(folderURL: folderURL, "Microphone capture failed: \(reason)")
+    }
+
     static func markCaptureIntegrity(folderURL: URL, integrity: CaptureIntegrity) {
         update(folderURL: folderURL) { metadata in
             metadata.captureIntegrity = integrity
@@ -219,9 +230,29 @@ enum UploadStatusStore {
         appendLog(folderURL: job.folderURL, "Feishu upload started.")
     }
 
+    static func checkpoint(folderURL: URL, stage: String, fingerprint: String? = nil,
+                           fileToken: String? = nil, minuteURL: URL? = nil, minuteToken: String? = nil) throws {
+        let saved = readMetadata(folderURL: folderURL)
+        if saved == nil, FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(metadataFile).path) {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        var metadata = saved ?? fallbackMetadata(folderURL: folderURL)
+        metadata.uploadStage = stage
+        if let fingerprint { metadata.uploadAudioSHA256 = fingerprint }
+        if let fileToken { metadata.fileToken = fileToken }
+        if let minuteURL { metadata.minuteURL = minuteURL.absoluteString }
+        if let minuteToken { metadata.minuteToken = minuteToken }
+        metadata.updatedAt = Date()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(metadata).write(to: folderURL.appendingPathComponent(metadataFile), options: .atomic)
+    }
+
     static func markFileUploaded(folderURL: URL, fileToken: String) {
         update(folderURL: folderURL) { metadata in
             metadata.fileToken = fileToken
+            metadata.uploadStage = "file_uploaded"
             metadata.uploadStatus = "file_uploaded"
             metadata.lastError = nil
         }
@@ -232,6 +263,7 @@ enum UploadStatusStore {
         update(folderURL: folderURL) { metadata in
             metadata.minuteURL = minuteURL.absoluteString
             metadata.minuteToken = minuteToken
+            metadata.uploadStage = "minute_created"
             metadata.uploadStatus = "minute_created"
             metadata.lastError = nil
         }
@@ -255,6 +287,11 @@ enum UploadStatusStore {
 
     static func markFailed(job: FeishuUploadJob, error: Error) {
         let message = describe(error)
+        if FileManager.default.fileExists(atPath: job.folderURL.appendingPathComponent(metadataFile).path),
+           readMetadata(folderURL: job.folderURL) == nil {
+            appendLog(folderURL: job.folderURL, "Upload failed; unreadable metadata preserved: \(message)")
+            return
+        }
         update(folderURL: job.folderURL) { metadata in
             metadata.meetingTitle = job.meetingTitle
             metadata.titleSource = job.titleSource?.rawValue ?? metadata.titleSource
@@ -294,7 +331,12 @@ enum UploadStatusStore {
     }
 
     private static func update(folderURL: URL, _ mutate: (inout RecordingMetadata) -> Void) {
-        var metadata = readMetadata(folderURL: folderURL) ?? fallbackMetadata(folderURL: folderURL)
+        let saved = readMetadata(folderURL: folderURL)
+        if saved == nil, FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(metadataFile).path) {
+            appendLog(folderURL: folderURL, "Metadata update skipped; unreadable metadata preserved.")
+            return
+        }
+        var metadata = saved ?? fallbackMetadata(folderURL: folderURL)
         mutate(&metadata)
         metadata.updatedAt = Date()
         write(metadata, folderURL: folderURL)

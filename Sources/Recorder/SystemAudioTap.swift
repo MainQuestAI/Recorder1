@@ -18,11 +18,8 @@ import os
 /// overran the ~10 ms realtime deadline, tearing the desktop stream at every IO-buffer boundary
 /// (audible as broadband clicks / "distortion"). All disk work lives on the writer thread.
 ///
-/// macOS 26 has a confirmed regression where `AudioHardwareCreateProcessTap` + aggregate silently
-/// delivers all-zero PCM after extended uptime / sample-rate / Bluetooth changes while the IOProc
-/// keeps firing. We run a WATCHDOG: if RMS ≈ 0 for ~3s while the default output device is active,
-/// we tear down BOTH the tap and the aggregate and rebuild them, continuing to append to the SAME
-/// `AVAudioFile`.
+/// Silent PCM is legitimate even while an output device is running. Only stalled callbacks and
+/// actual route changes rebuild the tap; silence is assessed by recording acceptance afterwards.
 final class SystemAudioTap {
 
     // MARK: - Public callbacks (called on audio / arbitrary threads)
@@ -93,6 +90,14 @@ final class SystemAudioTap {
     private var currentTapFormat: SystemAudioTapFormatSummary?
     private var fallbackEvents: [String] = []
     private var captureFailureNotified = false
+    private var captureFailureReason: String?
+    private var stallRecoveryCount = 0
+    private var insertedSilenceFrames = 0
+    private var lastBufferHostTime: UInt64?
+    private var lastBufferFrames = 0
+    private var lastBufferSampleRate = 0.0
+    private var inputSampleRate = 0.0
+    private let writerFailure = OSAllocatedUnfairLock<String?>(initialState: nil)
 
     /// The destination file. Stays open across watchdog rebuilds; finalized only on `stop()`.
     private var file: AVAudioFile?
@@ -130,10 +135,8 @@ final class SystemAudioTap {
     // MARK: - Realtime-path flags (separately lock-protected so the IOProc never blocks on `lock`)
 
     private let paused = OSAllocatedUnfairLock<Bool>(initialState: false)
+    private let resetTimeline = OSAllocatedUnfairLock<Bool>(initialState: false)
 
-    /// Host time (mach) of the last buffer the IOProc observed with non-trivial RMS. Used by the
-    /// watchdog to detect the zero-buffer regression. Initialized at start.
-    private let lastLoudHostTime = OSAllocatedUnfairLock<UInt64>(initialState: 0)
     /// Host time of the most recent IOProc callback (proves the proc is still firing).
     private let lastCallbackHostTime = OSAllocatedUnfairLock<UInt64>(initialState: 0)
 
@@ -142,12 +145,12 @@ final class SystemAudioTap {
     private var watchdogTimer: DispatchSourceTimer?
     private let watchdogQueue = DispatchQueue(label: "systemaudiotap.watchdog")
     private let routeListenerQueue = DispatchQueue(label: "systemaudiotap.route-listener")
-    /// If output is audibly running but the tap delivers ~silence for this long, rebuild.
-    private let watchdogSilenceThreshold: TimeInterval = 3.0
-    private let fallbackSilenceThreshold: TimeInterval = 1.5
+    private let callbackStallThreshold: TimeInterval = 5
     private var rebuilding = false
     private var defaultOutputListenerBlock: AudioObjectPropertyListenerBlock?
     private var defaultSystemOutputListenerBlock: AudioObjectPropertyListenerBlock?
+    private var sampleRateListenerBlock: AudioObjectPropertyListenerBlock?
+    private var sampleRateListenerDevice = AudioObjectID(kAudioObjectUnknown)
 
     // Throttle the meter callback to ~15 Hz.
     private var lastMeterPostHostTime: UInt64 = 0
@@ -189,6 +192,13 @@ final class SystemAudioTap {
         currentTapFormat = nil
         fallbackEvents = []
         captureFailureNotified = false
+        captureFailureReason = nil
+        stallRecoveryCount = 0
+        insertedSilenceFrames = 0
+        lastBufferHostTime = nil
+        lastBufferFrames = 0
+        writerFailure.withLock { $0 = nil }
+        paused.withLock { $0 = false }
         capturedSampleRateSource = nil
 
         // 1) Build tap + aggregate and read the tap format.
@@ -234,6 +244,7 @@ final class SystemAudioTap {
         self.tapFormat = built.tapFormat
         self.capturedSampleRate = built.captureSampleRate
         self.capturedSampleRateSource = built.captureSampleRateSource
+        self.inputSampleRate = built.captureSampleRate
 
         // 3) Spin up the off-realtime writer (ring + drain thread) BEFORE the
         //    IOProc starts producing. ~4 s of mono float headroom; the IOProc
@@ -243,7 +254,7 @@ final class SystemAudioTap {
         self.ring = newRing
         self.scratch = UnsafeMutablePointer<Float>.allocate(capacity: scratchCapacity)
         writerShouldStop.withLock { $0 = false }
-        startWriterThread(file: self.file!, writeFormat: writeFmt, ring: newRing)
+        startWriterThread(file: self.file!, writeFormat: writeFmt, ring: newRing, inputRate: inputSampleRate)
 
         // 4) Install IOProc + start the aggregate device.
         do {
@@ -262,7 +273,6 @@ final class SystemAudioTap {
 
         // Prime watchdog timestamps to "now".
         let now = mach_absolute_time()
-        lastLoudHostTime.withLock { $0 = now }
         lastCallbackHostTime.withLock { $0 = now }
         installRouteListeners()
         startWatchdog()
@@ -270,16 +280,17 @@ final class SystemAudioTap {
 
     /// Gate writes. Device keeps running, meters keep updating. Thread-safe.
     func setPaused(_ isPaused: Bool) {
+        if !isPaused { resetTimeline.withLock { $0 = true } }
         paused.withLock { $0 = isPaused }
     }
 
     /// Stop the IOProc, destroy the aggregate + tap, finalize the file.
     func stop() -> CaptureResult {
         stopWatchdog()
-        removeRouteListeners()
 
         lock.lock()
         defer { lock.unlock() }
+        removeRouteListeners()
 
         guard started else {
             return CaptureResult(
@@ -301,7 +312,10 @@ final class SystemAudioTap {
 
         if let dropped = ring?.totalDropped, dropped > 0 {
             Self.log.error("desktop tap dropped \(dropped) frames (consumer fell behind)")
+            captureFailureNotified = true
+            captureFailureReason = "System audio writer dropped \(dropped) frames."
         }
+        let droppedFrames = ring?.totalDropped ?? 0
         ring = nil
         scratch?.deallocate()
         scratch = nil
@@ -311,11 +325,14 @@ final class SystemAudioTap {
         writeFormat = nil
         tapFormat = nil
 
+        var metadata = captureMetadataLocked()
+        metadata.droppedFrames = droppedFrames
+        metadata.insertedSilenceFrames = insertedSilenceFrames
         return CaptureResult(
             firstHostTime: firstHostTime,
             sampleRate: capturedSampleRate,
             frameCount: capturedFrames,
-            systemAudio: captureMetadataLocked()
+            systemAudio: metadata
         )
     }
 
@@ -459,6 +476,7 @@ final class SystemAudioTap {
         guard let tapFmt = tapFormat else {
             throw TapError.invalidTapFormat
         }
+        let incomingRate = inputSampleRate
 
         // The IOProc runs on a Core Audio realtime thread. It captures `self` weakly via an
         // unmanaged-free closure: we keep `self` alive for the recording's duration and only tear
@@ -467,7 +485,7 @@ final class SystemAudioTap {
         var newProcID: AudioDeviceIOProcID?
         let ioBlock: AudioDeviceIOBlock = { [weak self] _, inInputData, inInputTime, _, _ in
             guard let self else { return }
-            self.handleIO(inputData: inInputData, inputTime: inInputTime, tapFormat: tapFmt)
+            self.handleIO(inputData: inInputData, inputTime: inInputTime, tapFormat: tapFmt, sampleRate: incomingRate)
         }
 
         let createStatus = AudioDeviceCreateIOProcIDWithBlock(
@@ -510,7 +528,8 @@ final class SystemAudioTap {
     private func handleIO(
         inputData: UnsafePointer<AudioBufferList>,
         inputTime: UnsafePointer<AudioTimeStamp>,
-        tapFormat: AVAudioFormat
+        tapFormat: AVAudioFormat,
+        sampleRate: Double
     ) {
         let now = mach_absolute_time()
         lastCallbackHostTime.withLock { $0 = now }
@@ -533,12 +552,9 @@ final class SystemAudioTap {
         guard frameCount > 0 else { return }
         let n = vDSP_Length(frameCount)
 
-        // --- Compute RMS for the meter + watchdog (mix of channel 0, cheap). ---
+        // --- Compute RMS for the meter (mix of channel 0, cheap). ---
         var rms: Float = 0
         vDSP_rmsqv(firstData, vDSP_Stride(tapFormat.isInterleaved ? channelCount : 1), &rms, n)
-        if rms > 0.000_03 { // ~ -90 dBFS; treat anything above as "loud" for the watchdog
-            lastLoudHostTime.withLock { $0 = now }
-        }
         let db: Float = rms > 0 ? 20 * log10(rms) : -120
 
         // Throttle meter callbacks to ~15 Hz.
@@ -546,6 +562,13 @@ final class SystemAudioTap {
             lastMeterPostHostTime = now
             onLevelDB?(db)
         }
+
+        let reset = resetTimeline.withLock { value in let reset = value; value = false; return reset }
+        let previousHostTime = reset ? nil : lastBufferHostTime
+        let previousDuration = lastBufferSampleRate > 0 ? Double(lastBufferFrames) / lastBufferSampleRate : 0
+        lastBufferHostTime = now
+        lastBufferFrames = frameCount
+        lastBufferSampleRate = sampleRate
 
         // --- Honor pause gate (meters keep updating above; only the write is gated). ---
         if paused.withLock({ $0 }) {
@@ -565,6 +588,26 @@ final class SystemAudioTap {
         // Record the first sample's host time for cross-stream alignment.
         if firstHostTime == nil {
             firstHostTime = inputTime.pointee.mHostTime
+        }
+
+        // Preserve elapsed time through route changes / callback stalls. Padding happens on the
+        // same producer as audio; no second ring writer, allocation, or disk I/O is introduced.
+        if let previousHostTime, now > previousHostTime, let scratch {
+            let elapsed = Double(Self.hostTimeToNanos(now - previousHostTime)) / 1_000_000_000
+            let gap = elapsed - previousDuration
+            if gap > 0.02 {
+                var remaining = Int(min(gap, 3) * sampleRate)
+                scratch.update(repeating: 0, count: scratchCapacity)
+                while remaining > 0 {
+                    let count = min(remaining, scratchCapacity)
+                    ring.write(scratch, count: count)
+                    insertedSilenceFrames += count
+                    remaining -= count
+                }
+                if gap > 3 {
+                    writerFailure.withLock { $0 = "System audio callback gap exceeded three seconds." }
+                }
+            }
         }
 
         if channelCount <= 1 {
@@ -609,13 +652,24 @@ final class SystemAudioTap {
     /// Start the background consumer that drains `ring` into `file`. The thread holds its own
     /// strong references to `file`/`ring` for its lifetime and exits when `writerShouldStop` is set
     /// AND the ring has been fully drained.
-    private func startWriterThread(file: AVAudioFile, writeFormat: AVAudioFormat, ring: FloatRingBuffer) {
+    private func startWriterThread(file: AVAudioFile, writeFormat: AVAudioFormat, ring: FloatRingBuffer, inputRate: Double) {
         let chunkFrames = 4096
+        let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputRate, channels: 1, interleaved: false)!
         let thread = Thread { [weak self] in
             guard let buffer = AVAudioPCMBuffer(
-                pcmFormat: writeFormat,
+                pcmFormat: inputFormat,
                 frameCapacity: AVAudioFrameCount(chunkFrames)
-            ), let dst = buffer.floatChannelData?[0] else { return }
+            ), let dst = buffer.floatChannelData?[0] else {
+                self?.writerFailure.withLock { $0 = "Could not allocate system audio writer buffer." }
+                return
+            }
+            let converter = abs(inputRate - writeFormat.sampleRate) > 1
+                ? AVAudioConverter(from: inputFormat, to: writeFormat) : nil
+            let converted = AVAudioPCMBuffer(pcmFormat: writeFormat, frameCapacity: AVAudioFrameCount(ceil(Double(chunkFrames) * writeFormat.sampleRate / inputRate) + 128))!
+            if abs(inputRate - writeFormat.sampleRate) > 1 && converter == nil {
+                self?.writerFailure.withLock { $0 = "Could not resample system audio after route change." }
+                return
+            }
 
             while true {
                 let stopRequested = self?.writerShouldStop.withLock { $0 } ?? true
@@ -623,10 +677,28 @@ final class SystemAudioTap {
                 if n > 0 {
                     buffer.frameLength = AVAudioFrameCount(n)
                     do {
-                        try file.write(from: buffer)
-                        self?.capturedFrames += AVAudioFramePosition(n)
+                        if let converter {
+                            var supplied = false
+                            var conversionError: NSError?
+                            let status = converter.convert(to: converted, error: &conversionError) { _, flag in
+                                if supplied { flag.pointee = .noDataNow; return nil }
+                                supplied = true
+                                flag.pointee = .haveData
+                                return buffer
+                            }
+                            if status == .error { throw conversionError ?? CocoaError(.fileWriteUnknown) as NSError }
+                            if converted.frameLength > 0 {
+                                try file.write(from: converted)
+                                self?.capturedFrames += AVAudioFramePosition(converted.frameLength)
+                            }
+                        } else {
+                            try file.write(from: buffer)
+                            self?.capturedFrames += AVAudioFramePosition(n)
+                        }
                     } catch {
+                        self?.writerFailure.withLock { $0 = error.localizedDescription }
                         self?.onFatalError?(error)
+                        break
                     }
                 } else if stopRequested {
                     break               // empty AND asked to stop -> fully drained
@@ -651,7 +723,7 @@ final class SystemAudioTap {
         writerThread = nil
     }
 
-    // MARK: - Watchdog (macOS 26 zero-buffer regression)
+    // MARK: - Callback-stall recovery
 
     private func startWatchdog() {
         let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
@@ -669,60 +741,36 @@ final class SystemAudioTap {
     }
 
     private func watchdogTick() {
-        // Don't intervene while paused (silence is expected) or mid-rebuild.
         if paused.withLock({ $0 }) { return }
-
         lock.lock()
         let isRunning = started && !rebuilding
-        let outDevice = lock_currentOutputDeviceLocked()
-        let config = activeConfig
+        let output = lock_currentOutputDeviceLocked()
         lock.unlock()
         guard isRunning else { return }
+        guard let output, Self.deviceIsRunningSomewhere(output) else { return }
 
-        // Only rebuild if the system output device is actually doing something — otherwise silence
-        // is legitimately silence and a rebuild would be pointless churn.
-        guard let outDevice, Self.deviceIsRunningSomewhere(outDevice) else { return }
-
+        // A running output device does not imply audible PCM. Rebuilding on silence destroys
+        // healthy taps during meeting pauses and repeatedly removes frames from the timeline.
         let now = mach_absolute_time()
-        let lastLoud = lastLoudHostTime.withLock { $0 }
-        let elapsedNanos = Self.hostTimeToNanos(now &- lastLoud)
-        let elapsedSeconds = Double(elapsedNanos) / 1_000_000_000.0
-
-        if config.tapKind == .global, elapsedSeconds >= fallbackSilenceThreshold {
-            lock.lock()
-            if activeConfig.tapKind == .global {
-                fallbackEvents.append("global_tap_silent_after_\(String(format: "%.1f", elapsedSeconds))s; switching_to_device_bound")
-                activeConfig.tapKind = .deviceBound
-            }
+        let lastCallback = lastCallbackHostTime.withLock { $0 }
+        let age = Double(Self.hostTimeToNanos(now &- lastCallback)) / 1_000_000_000
+        guard age >= callbackStallThreshold else { return }
+        lock.lock()
+        guard started, !rebuilding else { lock.unlock(); return }
+        if stallRecoveryCount >= 2 {
+            let notify = !captureFailureNotified
+            captureFailureNotified = true
+            captureFailureReason = "System audio callbacks stopped after two recovery attempts."
             lock.unlock()
-            rebuildTapAndAggregate(reason: "global_tap_silent_fallback")
+            if notify { onCaptureFailed?("System audio callbacks stopped after two recovery attempts.") }
             return
         }
-
-        if config.tapKind == .deviceBound, elapsedSeconds >= fallbackSilenceThreshold {
-            lock.lock()
-            if activeConfig.tapKind == .deviceBound {
-                fallbackEvents.append("device_bound_tap_silent_after_\(String(format: "%.1f", elapsedSeconds))s; switching_to_process_mixdown")
-                activeConfig.tapKind = .processMixdown
-            }
-            lock.unlock()
-            rebuildTapAndAggregate(reason: "device_bound_tap_silent_fallback")
-            return
-        }
-
-        if elapsedSeconds >= watchdogSilenceThreshold {
-            rebuildTapAndAggregate(reason: "watchdog_silence_rebuild")
-            var shouldNotify = false
-            lock.lock()
-            if activeConfig.tapKind == .processMixdown, !captureFailureNotified {
-                captureFailureNotified = true
-                shouldNotify = true
-            }
-            lock.unlock()
-            if shouldNotify {
-                onCaptureFailed?("Core Audio callbacks are active but system audio samples remain silent.")
-            }
-        }
+        stallRecoveryCount += 1
+        // Keep dynamic all-process coverage; never pin recording to a process list snapshot.
+        activeConfig.tapKind = .global
+        activeConfig.includeSubDevice.toggle()
+        lock.unlock()
+        rebuildTapAndAggregate(reason: "callback_stall_recovery")
     }
 
     /// Read the current default output device (caller holds `lock`; just a convenience wrapper that
@@ -751,11 +799,8 @@ final class SystemAudioTap {
         do {
             fallbackEvents.append("rebuild_started: \(reason)")
             let built = try buildTapAndAggregateLocked()
-            // Keep writing in the original write format; only update the realtime wrap format /
-            // sample rate if the tap renegotiated. Note: if the sample rate changed we keep the
-            // original write file format (mono float) but the incoming buffers are wrapped with the
-            // new tapFormat — AVAudioFile will write whatever frames we hand it, so a rate change
-            // mid-file produces a benign tempo seam rather than a crash.
+            // The CAF keeps its original rate. Drain the previous rate before starting a new
+            // off-thread converter, so queued frames are never relabelled with the new rate.
             self.tapFormat = built.tapFormat
             if writeFormat == nil {
                 self.writeFormat = AVAudioFormat(
@@ -767,8 +812,17 @@ final class SystemAudioTap {
                 self.capturedSampleRate = built.captureSampleRate
                 self.capturedSampleRateSource = built.captureSampleRateSource
             }
+            if abs(inputSampleRate - built.captureSampleRate) > 1, let file, let writeFormat, let ring {
+                stopWriterThreadAndDrain()
+                writerShouldStop.withLock { $0 = false }
+                inputSampleRate = built.captureSampleRate
+                startWriterThread(file: file, writeFormat: writeFormat, ring: ring, inputRate: inputSampleRate)
+            }
             try installIOProcAndStartLocked()
+            installOutputRateListenerLocked()
         } catch {
+            captureFailureNotified = true
+            captureFailureReason = error.localizedDescription
             rebuilding = false
             lock.unlock()
             // Rebuild failed: this is fatal for the desktop stream. Surface it; the mic recording
@@ -779,7 +833,6 @@ final class SystemAudioTap {
 
         // Reset watchdog clocks so we give the fresh tap a fair window before judging it again.
         let now = mach_absolute_time()
-        lastLoudHostTime.withLock { $0 = now }
         lastCallbackHostTime.withLock { $0 = now }
 
         rebuilding = false
@@ -788,6 +841,7 @@ final class SystemAudioTap {
 
     private func installRouteListeners() {
         removeRouteListeners()
+        installOutputRateListenerLocked()
 
         var defaultOutputAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -825,6 +879,7 @@ final class SystemAudioTap {
     }
 
     private func removeRouteListeners() {
+        removeOutputRateListener()
         if let defaultOutputListenerBlock {
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -856,11 +911,41 @@ final class SystemAudioTap {
         defaultSystemOutputListenerBlock = nil
     }
 
+    private func removeOutputRateListener() {
+        if let sampleRateListenerBlock {
+            var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(sampleRateListenerDevice, &address, routeListenerQueue, sampleRateListenerBlock)
+        }
+        sampleRateListenerBlock = nil
+        sampleRateListenerDevice = kAudioObjectUnknown
+    }
+
+    private func installOutputRateListenerLocked() {
+        guard let device = currentDevice?.id else { return }
+        if sampleRateListenerDevice == device { return }
+        removeOutputRateListener()
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleRouteChanged(reason: "output_sample_rate_changed")
+        }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        if AudioObjectAddPropertyListenerBlock(device, &address, routeListenerQueue, block) == noErr {
+            sampleRateListenerDevice = device
+            sampleRateListenerBlock = block
+        }
+    }
+
     private func handleRouteChanged(reason: String) {
         lock.lock()
         let shouldRebuild = started && !rebuilding
         let before = currentDevice
         let after = try? Self.deviceSnapshot(deviceID: Self.outputDevice(role: activeConfig.deviceRole))
+        if before?.uid == after?.uid, before?.sampleRate == after?.sampleRate {
+            lock.unlock()
+            return
+        }
+        stallRecoveryCount = 0
         lock.unlock()
 
         let event = SystemAudioRouteChangeEvent(
@@ -885,10 +970,8 @@ final class SystemAudioTap {
             captureSampleRateSource: capturedSampleRateSource,
             fallbackEvents: fallbackEvents,
             routeChanges: [],
-            systemAudioCaptureFailed: captureFailureNotified,
-            lastFailureReason: captureFailureNotified
-                ? "Core Audio callbacks are active but system audio samples remain silent."
-                : nil
+            systemAudioCaptureFailed: captureFailureNotified || writerFailure.withLock { $0 != nil },
+            lastFailureReason: captureFailureReason ?? writerFailure.withLock { $0 }
         )
     }
 

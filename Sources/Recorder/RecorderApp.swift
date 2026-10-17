@@ -6,10 +6,13 @@ struct RecorderApp: App {
     @State private var model = RecorderModel()
 
     init() {
+        if CommandLine.arguments.contains("--diagnose-upload-gate") {
+            SystemAudioDiagnostics.runUploadGateAndExit()
+        }
         if CommandLine.arguments.contains("--diagnose-system-audio") {
             SystemAudioDiagnostics.runAndExit()
         }
-        if CommandLine.arguments.contains("--diagnose-audio-capture-acceptance") {
+        if CommandLine.arguments.contains("--diagnose-audio-capture-acceptance") || CommandLine.arguments.contains("--diagnose-continuity") {
             SystemAudioDiagnostics.runRecordingAcceptanceAndExit()
         }
         if CommandLine.arguments.contains("--diagnose-system-audio-matrix") {

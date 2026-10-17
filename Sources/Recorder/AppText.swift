@@ -116,12 +116,13 @@ enum AppText {
             "status.checkingMic": "正在检查麦克风权限…",
             "status.micPermissionRequired": "需要麦克风权限。请在系统设置中允许。",
             "status.desktopError": "系统声音错误：%@",
-            "status.systemAudioSilent": "系统声音采集仍为静音。",
+            "status.systemAudioSilent": "系统声音采集异常，请检查本地录音。",
+            "status.systemAudioNeedsCheck": "长时间未检测到系统声音，请确认远端声音是否正在录入。",
             "status.micError": "麦克风错误：%@",
             "status.createFolderFailed": "无法创建录音文件夹：%@",
             "status.captureStartFailed": "无法开始录音：%@",
             "status.mixing": "正在合成…",
-            "status.savedSystemMissing": "已保存 %@ · 未录到系统声音",
+            "status.savedSystemMissing": "已保存 %@ · 录音完整性需确认",
             "status.saved": "已保存 %@",
             "status.savedAutoOff": "已保存 %@ · 自动上传已关闭",
             "status.mixFailed": "合成失败，原始文件已保留：%@",
@@ -139,7 +140,7 @@ enum AppText {
             "error.invalidMicFormat": "麦克风输入格式不可用。",
             "error.inputDeviceUnavailable": "选中的麦克风已不可用：%@",
             "error.setInputDeviceFailed": "无法使用选中的麦克风：%@（系统错误 %@）",
-            "capture.degraded": "只录到麦克风，没有录到系统/会议远端声音，是否仍要上传？"
+            "capture.degraded": "录音完整性检查未通过，系统声音可能缺失或声轨未对齐。请检查本地录音后，再决定是否上传。"
         ],
         .en: [
             "tab.general": "General",
@@ -231,12 +232,13 @@ enum AppText {
             "status.checkingMic": "Checking microphone permission...",
             "status.micPermissionRequired": "Microphone permission is required. Allow it in System Settings.",
             "status.desktopError": "Desktop audio error: %@",
-            "status.systemAudioSilent": "System audio capture is silent.",
+            "status.systemAudioSilent": "System audio capture failed. Check the local recording.",
+            "status.systemAudioNeedsCheck": "System audio has been quiet for an extended time. Check that remote voices are being captured.",
             "status.micError": "Mic error: %@",
             "status.createFolderFailed": "Could not create recording folder: %@",
             "status.captureStartFailed": "Could not start capture: %@",
             "status.mixing": "Mixing…",
-            "status.savedSystemMissing": "Saved %@ · system audio missing",
+            "status.savedSystemMissing": "Saved %@ · recording needs review",
             "status.saved": "Saved %@",
             "status.savedAutoOff": "Saved %@ · auto upload off",
             "status.mixFailed": "Mix failed (raw files kept): %@",
@@ -254,7 +256,7 @@ enum AppText {
             "error.invalidMicFormat": "Microphone input format is unusable.",
             "error.inputDeviceUnavailable": "Selected microphone is no longer available: %@",
             "error.setInputDeviceFailed": "Could not use selected microphone: %@ (OSStatus %@)",
-            "capture.degraded": "Only microphone was captured; system/remote meeting audio is missing. Upload anyway?"
+            "capture.degraded": "Recording integrity could not be confirmed. System audio may be missing or tracks misaligned. Check the local recording before uploading."
         ]
     ]
 }
