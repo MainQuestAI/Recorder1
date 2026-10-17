@@ -21,7 +21,9 @@ jobs:
         run: ./build.sh
 
       - name: Verify app signature
-        run: codesign --verify --deep --strict Recorder1.app
+        run: |
+          test ! -e Recorder1.app
+          codesign --verify --deep --strict .build/app-output.noindex/Recorder1.app
 
       - name: Verify upload retry with fake CLI
         run: bash scripts/verify-upload-retry.sh

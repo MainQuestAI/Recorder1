@@ -103,8 +103,10 @@ Recorder1 会自动从常见 Homebrew/npm 路径和 `PATH` 中查找 `lark-cli`�
 
 ```bash
 ./build.sh
-open ./Recorder1.app
+open ./.build/app-output.noindex/Recorder1.app
 ```
+
+开发构建放在 `.build/app-output.noindex/`，避免 Spotlight 把它与已安装版本列成两个入口。
 
 默认构建会使用 ad-hoc 签名，方便本地无人值守构建。需要指定已安装的兼容 SDK 时，可设置 `SDKROOT=/path/to/MacOSX.sdk`。正式验收建议使用稳定签名身份：
 
@@ -137,7 +139,7 @@ bash scripts/build-for-audio-capture-acceptance.sh
 
 ```bash
 rm -rf /Applications/Recorder1.app
-ditto --rsrc --extattr Recorder1.app /Applications/Recorder1.app
+ditto --rsrc --extattr .build/app-output.noindex/Recorder1.app /Applications/Recorder1.app
 open /Applications/Recorder1.app
 ```
 
@@ -224,7 +226,7 @@ bash scripts/analyze-latest-audio.sh 1800
 系统音频矩阵诊断：
 
 ```bash
-Recorder1.app/Contents/MacOS/Recorder \
+.build/app-output.noindex/Recorder1.app/Contents/MacOS/Recorder \
   --diagnose-system-audio-matrix \
   --diagnose-output /tmp/recorder1-system-audio-matrix.json
 ```

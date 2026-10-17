@@ -102,7 +102,7 @@ printf 'Swift: %s\n' "$(swift --version | head -n 1)"
 run_step "swift build" swift build
 run_step "bundle Recorder1.app" ./build.sh
 
-APP="Recorder1.app"
+APP=".build/app-output.noindex/Recorder1.app"
 APP_PLIST="$APP/Contents/Info.plist"
 
 if [[ -d "$APP" ]]; then

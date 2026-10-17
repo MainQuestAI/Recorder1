@@ -9,7 +9,7 @@ Run from the repository root on macOS:
 ```bash
 swift build
 ./build.sh
-codesign --verify --deep --strict Recorder1.app
+codesign --verify --deep --strict .build/app-output.noindex/Recorder1.app
 bash scripts/verify-audio-integrity.sh
 bash scripts/verify-upload-retry.sh
 bash scripts/verify-retention-cleanup.sh
@@ -36,9 +36,9 @@ Raw measurements, logs, private recording details, and cloud identifiers are ret
 Build using the existing local signing identity, then run the signed app executable:
 
 ```bash
-Recorder1.app/Contents/MacOS/Recorder --diagnose-continuity --diagnose-duration 120
-Recorder1.app/Contents/MacOS/Recorder --diagnose-system-audio
-Recorder1.app/Contents/MacOS/Recorder --diagnose-upload-gate --diagnose-folder /path/to/local/recording
+.build/app-output.noindex/Recorder1.app/Contents/MacOS/Recorder --diagnose-continuity --diagnose-duration 120
+.build/app-output.noindex/Recorder1.app/Contents/MacOS/Recorder --diagnose-system-audio
+.build/app-output.noindex/Recorder1.app/Contents/MacOS/Recorder --diagnose-upload-gate --diagnose-folder /path/to/local/recording
 ```
 
 The continuity probe plays synthetic test tones and captures the selected microphone. Device and sample-rate changes must be exercised on the test machine. The upload-gate probe expects a degraded local recording and confirms that upload is blocked before CLI execution.

@@ -23,7 +23,7 @@ if [[ -z "${CODESIGN_IDENTITY:-}" ]]; then
   exit 1
 fi
 
-APP="Recorder1.app"
+APP=".build/app-output.noindex/Recorder1.app"
 REPORT="signing-report.txt"
 
 printf '==> building signed acceptance app\n'

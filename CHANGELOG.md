@@ -8,6 +8,7 @@ The format follows the spirit of [Keep a Changelog](https://keepachangelog.com/e
 
 ### Fixed
 
+- Keep development app bundles in a non-indexed build directory to prevent duplicate Recorder1 entries beside the installed app.
 - Keep system audio taps running through silence; bound callback-stall recovery instead of repeatedly rebuilding on quiet PCM.
 - Recover microphone capture after audio-engine configuration changes, resample rate changes, and preserve short capture gaps in both tracks.
 - Require recording review for sparse system audio, capture errors, analysis failures, and mismatched track durations, including library uploads and retries.

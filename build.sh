@@ -15,7 +15,9 @@ set -e
 
 cd "$(dirname "$0")"
 
-APP="Recorder1.app"
+# Keep development bundles out of Spotlight so they do not appear as a second
+# Recorder1 beside the signed installation in /Applications.
+APP=".build/app-output.noindex/Recorder1.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
