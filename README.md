@@ -100,8 +100,10 @@ The app auto-detects `lark-cli` from common Homebrew/npm locations and `PATH`. A
 
 ```bash
 ./build.sh
-open ./Recorder1.app
+open ./.build/app-output.noindex/Recorder1.app
 ```
+
+Development bundles are built under `.build/app-output.noindex/` so Spotlight does not list them alongside the installed app.
 
 The build script defaults to ad-hoc signing so unattended local builds do not hang on Keychain prompts. Set `SDKROOT=/path/to/MacOSX.sdk` when selecting a compatible installed SDK explicitly.
 
@@ -136,7 +138,7 @@ After building, copy the signed app into Applications:
 
 ```bash
 rm -rf /Applications/Recorder1.app
-ditto --rsrc --extattr Recorder1.app /Applications/Recorder1.app
+ditto --rsrc --extattr .build/app-output.noindex/Recorder1.app /Applications/Recorder1.app
 open /Applications/Recorder1.app
 ```
 
@@ -223,7 +225,7 @@ The strict channel check expects both stereo channels to contain measurable audi
 System-audio matrix diagnostic:
 
 ```bash
-Recorder1.app/Contents/MacOS/Recorder \
+.build/app-output.noindex/Recorder1.app/Contents/MacOS/Recorder \
   --diagnose-system-audio-matrix \
   --diagnose-output /tmp/recorder1-system-audio-matrix.json
 ```

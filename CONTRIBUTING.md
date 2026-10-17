@@ -28,7 +28,7 @@ swift build
 Run:
 
 ```bash
-open ./Recorder1.app
+open ./.build/app-output.noindex/Recorder1.app
 ```
 
 ## Verification Before Opening A PR
