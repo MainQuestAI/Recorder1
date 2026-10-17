@@ -98,7 +98,7 @@ Related files:
 
 Recorder1 analyzes the final `audio.m4a` after mixing.
 
-If system audio is silent while microphone audio is present, the app marks the recording as degraded and blocks automatic upload until the user confirms.
+If system audio is missing or sparse, capture reports errors, analysis fails, or raw-track durations disagree, the app marks the recording as degraded and blocks upload until the user confirms. The same gate runs for new recordings, library uploads, and retries; existing Minutes can resume artifact retrieval without sending new audio.
 
 Related files:
 
@@ -128,7 +128,7 @@ Related files:
 
 ### Output Route Handling
 
-Recorder1 listens for output-device changes during recording. When the output route changes, it logs the change, rebuilds the tap/aggregate path, and records route metadata.
+Recorder1 listens for output-device and sample-rate changes during recording. When the route or rate changes, it logs the change, rebuilds the tap/aggregate path, resamples into the original raw-file format, and records route metadata. Microphone capture recovers after audio-engine configuration changes.
 
 Related files:
 
@@ -250,6 +250,7 @@ codesign --display --entitlements :- /Applications/Recorder1.app
 | --- | --- |
 | `scripts/verify-mvp.sh` | Broad MVP smoke check. |
 | `scripts/verify-upload-retry.sh` | Fake CLI test for failed upload and retry. |
+| `scripts/verify-audio-integrity.sh` | Synthetic audio tests for the shared upload acceptance gate. |
 | `scripts/verify-audio-capture-acceptance.sh` | Strict signed system-audio acceptance. |
 | `scripts/analyze-latest-audio.sh` | Analyze latest local recording channels. |
 | `scripts/verify-retention-cleanup.sh` | Check local cleanup policy behavior. |

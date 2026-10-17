@@ -1,6 +1,7 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import AudioToolbox
+import CoreAudio
 import os
 
 /// Microphone capture via `AVAudioEngine`'s input node, written MONO to `mic.caf`.
@@ -54,7 +55,15 @@ final class MicCapture {
 
     /// The engine is created lazily per `start()` so a stop/start cycle gets a fresh
     /// graph (and re-reads the current input device format).
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    private let controlQueue = DispatchQueue(label: "com.dingcheng.Recorder1.mic-control")
+    private var configurationObserver: NSObjectProtocol?
+    private var preferredUID: String?
+    private var monoWriteFormat: AVAudioFormat?
+    private var converter: AVAudioConverter?
+    private var failureReason: String?
+    private var lastBufferHostTime: UInt64?
+    private var previousBufferDuration = 0.0
 
     // MARK: - Shared, lock-protected state
 
@@ -107,6 +116,13 @@ final class MicCapture {
 
     /// Begin capturing the microphone, writing MONO Float32 to `url` (CAF).
     func start(writingTo url: URL, preferredInputDeviceUID: String? = nil) throws {
+        try controlQueue.sync { try startOnControlQueue(writingTo: url, preferredInputDeviceUID: preferredInputDeviceUID) }
+    }
+
+    private func startOnControlQueue(writingTo url: URL, preferredInputDeviceUID: String?) throws {
+        guard !lock.withLock({ running }) else { return }
+        engine = AVAudioEngine()
+        preferredUID = preferredInputDeviceUID
         if let preferredInputDeviceUID,
            !preferredInputDeviceUID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try applyPreferredInputDevice(uid: preferredInputDeviceUID)
@@ -155,25 +171,56 @@ final class MicCapture {
             self.frameCount = 0
             self.running = true
             self.currentDevice = resolvedCurrentInputDevice(preferredInputDeviceUID: preferredInputDeviceUID)
+            self.monoWriteFormat = monoFormat
+            self.converter = nil
+            self.failureReason = nil
+            self.lastBufferHostTime = nil
         }
 
-        // Install the tap on the INPUT format (passing `nil` lets the engine use the
-        // node's own format, which is exactly inputFormat). Buffer size 4096 per contract.
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, when in
-            self?.handleBuffer(buffer, when: when, monoFormat: monoFormat)
-        }
-
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            // Roll back so a failed start leaves us in a clean state.
+        do { try installTapAndStart() }
+        catch {
             inputNode.removeTap(onBus: 0)
-            lock.withLock {
-                self.file = nil
-                self.running = false
-            }
+            lock.withLock { self.file = nil; self.running = false }
             throw error
+        }
+    }
+
+    private func installTapAndStart() throws {
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0,
+              let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false),
+              let output = monoWriteFormat else { throw MicError.invalidInputFormat }
+        let conversion = abs(mono.sampleRate - output.sampleRate) > 1 ? AVAudioConverter(from: mono, to: output) : nil
+        if abs(mono.sampleRate - output.sampleRate) > 1 && conversion == nil { throw MicError.invalidInputFormat }
+        lock.withLock { converter = conversion }
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, when in
+            self?.handleBuffer(buffer, when: when, monoFormat: mono)
+        }
+        engine.prepare()
+        try engine.start()
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] notification in
+            guard let source = notification.object as? AVAudioEngine else { return }
+            self?.controlQueue.async { [weak self] in self?.recoverConfiguration(source: source) }
+        }
+    }
+
+    private func recoverConfiguration(source: AVAudioEngine) {
+        guard source === engine, lock.withLock({ running }) else { return }
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine = AVAudioEngine()
+        do {
+            if let preferredUID, !preferredUID.isEmpty { try applyPreferredInputDevice(uid: preferredUID) }
+            try installTapAndStart()
+            lock.withLock { currentDevice = resolvedCurrentInputDevice(preferredInputDeviceUID: preferredUID) }
+        } catch {
+            lock.withLock { failureReason = error.localizedDescription }
+            onFatalError?(error)
         }
     }
 
@@ -207,13 +254,44 @@ final class MicCapture {
         lock.withLock {
             guard self.running, !self.paused, let file = self.file else { return }
             do {
-                try file.write(from: writeBuffer)
+                // Use callback arrival time for continuity across rebuilt hardware clocks.
+                let now = mach_absolute_time()
+                if let last = lastBufferHostTime, now > last {
+                    let gap = Double(AudioConvertHostTimeToNanos(now - last)) / 1_000_000_000 - previousBufferDuration
+                    if gap > 0.02, let outputFormat = monoWriteFormat {
+                        let padFrames = AVAudioFrameCount(min(gap, 3) * sampleRate)
+                        if let padding = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: max(1, padFrames)) {
+                            padding.frameLength = padFrames
+                            padding.floatChannelData?[0].update(repeating: 0, count: Int(padFrames))
+                            try file.write(from: padding)
+                            self.frameCount += AVAudioFramePosition(padFrames)
+                        }
+                        if gap > 3 { failureReason = "Microphone callback gap exceeded three seconds." }
+                    }
+                }
+                lastBufferHostTime = now
+                previousBufferDuration = Double(buffer.frameLength) / buffer.format.sampleRate
+                if let converter, let outputFormat = monoWriteFormat {
+                    let capacity = AVAudioFrameCount(ceil(Double(writeBuffer.frameLength) * sampleRate / writeBuffer.format.sampleRate) + 128)
+                    guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { throw MicError.invalidInputFormat }
+                    var supplied = false
+                    var conversionError: NSError?
+                    let status = converter.convert(to: output, error: &conversionError) { _, flag in
+                        if supplied { flag.pointee = .noDataNow; return nil }
+                        supplied = true; flag.pointee = .haveData; return writeBuffer
+                    }
+                    if status == .error { throw conversionError ?? CocoaError(.fileWriteUnknown) as NSError }
+                    if output.frameLength > 0 { try file.write(from: output); self.frameCount += AVAudioFramePosition(output.frameLength) }
+                } else {
+                    try file.write(from: writeBuffer)
+                    self.frameCount += AVAudioFramePosition(writeBuffer.frameLength)
+                }
                 if self.firstHostTime == nil {
                     self.firstHostTime = hostTime
                 }
-                self.frameCount += AVAudioFramePosition(writeBuffer.frameLength)
             } catch {
                 // A write failure is fatal for this capture; report once and stop writing.
+                self.failureReason = error.localizedDescription
                 self.running = false
                 self.file = nil
                 self.onFatalError?(error)
@@ -260,6 +338,7 @@ final class MicCapture {
     func setPaused(_ paused: Bool) {
         lock.withLock {
             self.paused = paused
+            self.lastBufferHostTime = nil
         }
     }
 
@@ -267,6 +346,12 @@ final class MicCapture {
 
     /// Stop the engine, finalize the file, and return what was captured.
     func stop() -> CaptureResult {
+        controlQueue.sync { stopOnControlQueue() }
+    }
+
+    private func stopOnControlQueue() -> CaptureResult {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
         // Stop the running graph first so no more buffers arrive after we drop the file.
         if engine.isRunning {
             engine.inputNode.removeTap(onBus: 0)
@@ -281,7 +366,8 @@ final class MicCapture {
             let result = CaptureResult(
                 firstHostTime: self.firstHostTime,
                 sampleRate: self.sampleRate,
-                frameCount: self.frameCount
+                frameCount: self.frameCount,
+                failureReason: self.failureReason
             )
             self.running = false
             self.file = nil   // releasing the AVAudioFile finalizes the CAF on disk

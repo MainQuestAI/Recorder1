@@ -39,6 +39,7 @@ Run:
 swift build
 ./build.sh
 bash scripts/verify-upload-retry.sh
+bash scripts/verify-audio-integrity.sh
 bash scripts/verify-retention-cleanup.sh
 ```
 

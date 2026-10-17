@@ -42,8 +42,24 @@ let rest = Array(args.dropFirst(2))
 let fm = FileManager.default
 let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
 
+func failIfMarked(_ marker: String, type: String, message: String, code: Int? = nil, exitCode: Int32 = 4) throws {
+    let path = cwd.appendingPathComponent(marker)
+    guard fm.fileExists(atPath: path.path) else { return }
+    if !marker.hasPrefix("always-") { try fm.removeItem(at: path) }
+    var error: [String: Any] = ["type": type, "message": message]
+    if let code { error["code"] = code }
+    let data = try JSONSerialization.data(withJSONObject: ["ok": false, "error": error])
+    exitWithError(String(decoding: data, as: UTF8.self), code: exitCode)
+}
+
 switch command {
 case "drive +upload":
+    if fm.fileExists(atPath: cwd.appendingPathComponent("crash-drive-after-create").path) {
+        try Data().write(to: cwd.appendingPathComponent("remote-drive-created"))
+        exitWithError("simulated CLI crash after remote creation", code: 70)
+    }
+    try failIfMarked("fail-drive-network-once", type: "network", message: "POST /drive/v1/files/upload_part: unexpected EOF")
+    try failIfMarked("always-drive-network", type: "network", message: "POST /drive/v1/files/upload_part: unexpected EOF")
     let file = value(after: "--file", in: rest) ?? ""
     guard file.hasSuffix(".m4a") else {
         exitWithError("expected an m4a upload file, got: \(file)", code: 11)
@@ -61,7 +77,7 @@ case "drive +upload":
     let failOnce = cwd.appendingPathComponent("fail-drive-once")
     if fm.fileExists(atPath: failOnce.path) {
         try? fm.removeItem(at: failOnce)
-        exitWithError("forced drive upload failure", code: 23)
+        exitWithError("{\"ok\":false,\"error\":{\"type\":\"validation\",\"message\":\"forced drive upload failure before creation\"}}", code: 23)
     }
     writeStderr("Uploading: \(file) (probe) -> Drive root folder")
     print("""
@@ -79,6 +95,13 @@ case "drive +upload":
     """)
 
 case "minutes +upload":
+    if fm.fileExists(atPath: cwd.appendingPathComponent("crash-minute-after-create").path) {
+        try Data().write(to: cwd.appendingPathComponent("remote-minute-created"))
+        exitWithError("simulated CLI crash after remote creation", code: 70)
+    }
+    try failIfMarked("fail-minute-service-once", type: "api", message: "service internal error", code: 2091006, exitCode: 1)
+    try failIfMarked("fail-minute-auth-once", type: "authorization", message: "missing scope", exitCode: 3)
+    try failIfMarked("fail-minute-network-once", type: "network", message: "POST /minutes/v1/minutes/upload: unexpected EOF")
     let fileToken = value(after: "--file-token", in: rest) ?? ""
     guard fileToken == "fake-file-token" else {
         exitWithError("expected fake-file-token, got: \(fileToken)", code: 31)
@@ -94,6 +117,12 @@ case "minutes +upload":
     """)
 
 case "vc +notes":
+    try failIfMarked("fail-notes-once", type: "authorization", message: "missing scope", exitCode: 3)
+    if fm.fileExists(atPath: cwd.appendingPathComponent("not-ready-once").path) {
+        try fm.removeItem(at: cwd.appendingPathComponent("not-ready-once"))
+        print("{\"ok\":true,\"data\":{\"message\":\"minute not ready\"}}")
+        exit(0)
+    }
     let minuteToken = value(after: "--minute-tokens", in: rest) ?? ""
     guard minuteToken == "fake-minute-token" else {
         exitWithError("expected fake-minute-token, got: \(minuteToken)", code: 41)
@@ -127,6 +156,17 @@ case "vc +notes":
     }
     """)
 
+case "drive metas":
+    if fm.fileExists(atPath: cwd.appendingPathComponent("missing-file").path) {
+        print("{\"ok\":true,\"data\":{\"metas\":[],\"failed_list\":[{\"code\":970005,\"token\":\"fake-file-token\"}]}}")
+    } else {
+        print("{\"ok\":true,\"data\":{\"metas\":[{\"doc_token\":\"fake-file-token\"}]}}")
+    }
+case "minutes minutes":
+    print("{\"ok\":true,\"data\":{\"minute\":{\"token\":\"fake-minute-token\"}}}")
+case "probe sleep":
+    try String(ProcessInfo.processInfo.processIdentifier).write(to: cwd.appendingPathComponent("sleep.pid"), atomically: true, encoding: .utf8)
+    Thread.sleep(forTimeInterval: 60)
 default:
     exitWithError("unexpected fake lark-cli command: \(args.joined(separator: " "))", code: 99)
 }

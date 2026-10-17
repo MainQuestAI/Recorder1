@@ -45,11 +45,11 @@ Recorder1 保留这些本地录音能力，把录音后的处理链路从 Gemini
   - `lark-cli drive +upload`
   - `lark-cli minutes +upload`
   - 可选 `lark-cli vc +notes`
-- 上传失败后保留本地录音，可直接 Retry Upload。
+- 上传失败后保留本地录音；重试会检查并复用已上传文件和已创建妙记，对明确的临时错误最多尝试 3 次。
 - 保存 `metadata.json`、`upload.log`、`feishu_minutes.json`、`transcript.md` 和 `summary.md`。
 - 混音后自动分析音频质量。
-- 如果只录到麦克风、系统声音为空，默认阻止自动上传，并提示用户确认。
-- 输出设备变化时记录日志，并重建系统音频采集链路。
+- 系统声音长期缺失、采集报错、分析失败或声轨时长不一致时，阻止自动上传并提示检查；录音库上传和重试也执行同一检查。
+- 保持静音期间的系统声音采集；输出设备或采样率变化时恢复系统和麦克风采集。
 - UI 支持中文和英文切换。
 - 支持上传成功后自动清理本地录音：永久保留、15 天后删除、30 天后删除。
 
@@ -91,11 +91,11 @@ Recorder1 保留这些本地录音能力，把录音后的处理链路从 Gemini
 - 已安装并登录 `lark-cli`。
 - 当前 Feishu/Lark 用户需要具备这些权限：
   - `drive:file:upload`
+  - `drive:drive.metadata:readonly`
   - `minutes:minutes.upload:write`
   - `vc:note:read`
   - `minutes:minutes:readonly`
   - `minutes:minutes.artifacts:read`
-  - `minutes:minutes.transcript:export`
 
 Recorder1 会自动从常见 Homebrew/npm 路径和 `PATH` 中查找 `lark-cli`。也可以在设置里指定 `lark-cli` 路径。
 
@@ -106,7 +106,7 @@ Recorder1 会自动从常见 Homebrew/npm 路径和 `PATH` 中查找 `lark-cli`�
 open ./Recorder1.app
 ```
 
-默认构建会使用 ad-hoc 签名，方便本地无人值守构建。正式验收建议使用稳定签名身份：
+默认构建会使用 ad-hoc 签名，方便本地无人值守构建。需要指定已安装的兼容 SDK 时，可设置 `SDKROOT=/path/to/MacOSX.sdk`。正式验收建议使用稳定签名身份：
 
 ```bash
 CODESIGN_IDENTITY="Your Signing Identity" ./build.sh
@@ -191,9 +191,13 @@ audio.m4a
 
 飞书妙记生成是异步流程。如果 `vc +notes` 返回妙记尚未准备好，Recorder1 会短时间重试。
 
-上传失败不会删除本地录音。错误会写入 `upload.log`，`audio.m4a` 会保留，用户可以在菜单栏里 Retry Upload。
+Recorder1 会为 `lark-cli` 设置 `LARK_CLI_NO_PROXY=1`，让飞书请求直连，避免继承本机已经失效的 VPN/代理环境变量（例如 `HTTP_PROXY=127.0.0.1:7890`）。这不会修改系统代理设置；如果所在网络确实需要代理，请在终端中直接运行 `lark-cli`，或后续为应用配置代理选项。
+
+上传失败不会删除本地录音。错误会写入 `upload.log`，`audio.m4a` 会保留，用户可以在菜单栏里 Retry Upload。如果创建请求超时或响应丢失，云端结果可能未知；此时会阻止重放，请先核对云空间或妙记，避免重复创建。
 
 ## 验证
+
+回归命令、原生验证结果和剩余检查见[音频与上传修复验证记录](docs/repair-validation-2026-10-17.md)。
 
 运行 MVP 自检：
 
@@ -231,7 +235,7 @@ Recorder1.app/Contents/MacOS/Recorder \
 bash scripts/verify-audio-capture-acceptance.sh
 ```
 
-如果 App 是 ad-hoc 签名、没有任何 default output probe 通过、`desktop.caf` 静音，或 `audio.m4a` 左声道静音，脚本会失败。
+如果 App 是 ad-hoc 签名、没有任何 default output probe 通过、`desktop.caf` 静音、`audio.m4a` 左声道静音、采集报错或统一录音完整性检查不通过，脚本会失败。
 
 ## 架构
 
@@ -301,7 +305,7 @@ open /Applications/Recorder1.app
   --diagnose-output /tmp/recorder1-system-audio-matrix.json
 ```
 
-部分 macOS 26 环境里，global tap 和 device-bound tap 可能返回静音样本，process mixdown 可用。Recorder1 会把实际 tap 模式写入 `metadata.json`。
+部分 macOS 26 环境里，global tap 和 device-bound tap 可能返回静音样本，process mixdown 可用；矩阵诊断会比较这些模式。正常录音保持 global 的全进程覆盖，不会仅因静音切换为进程快照，并把实际 tap 模式写入 `metadata.json`。
 
 ### 上传失败
 

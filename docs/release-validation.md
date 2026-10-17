@@ -1,6 +1,6 @@
 # Recorder1 Release Validation Notes
 
-This document summarizes the public-safe validation status for Recorder1 before open-source publication.
+This document summarizes the public-safe MVP validation baseline for Recorder1. See the [1.0.1 repair validation record](repair-validation-2026-10-17.md) for the latest repair-specific observations and untested scenarios.
 
 ## Scope
 
@@ -38,7 +38,7 @@ Recorder1 includes multiple system-audio capture modes and diagnostics:
 - route-change logging,
 - tap rebuild on output device changes.
 
-On some macOS versions and routes, a Core Audio tap can report callbacks and frame counts while returning silent samples. Recorder1 records capture metadata and can fall back to another tap mode when needed.
+On some macOS versions and routes, a Core Audio tap can report callbacks and frame counts while returning silent samples. The matrix diagnostic compares tap modes. During recording, Recorder1 keeps global all-process coverage, preserves taps through silence, and bounds recovery when callbacks stop; it records capture failures for the shared acceptance gate.
 
 ## Public Test Commands
 
@@ -88,7 +88,7 @@ CI intentionally does not:
 - depend on a logged-in `lark-cli`,
 - upload to a real Feishu tenant.
 
-CI covers buildability, app bundle assembly, code signing verification, fake upload retry, and retention cleanup logic.
+CI covers buildability, app bundle assembly, code signing verification, fake upload retry, synthetic audio-integrity acceptance, and retention cleanup logic. CI signing is ad hoc and does not verify native recording permissions or the installed local certificate.
 
 ## Manual Verification Still Recommended
 

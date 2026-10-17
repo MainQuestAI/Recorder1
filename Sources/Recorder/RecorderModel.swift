@@ -90,6 +90,9 @@ final class RecorderModel {
 
     /// Everything needed to retry a Feishu upload, captured at save time.
     @ObservationIgnored private var lastUploadJob: FeishuUploadJob?
+    @ObservationIgnored private var activeUploadFolders: Set<URL> = []
+    @ObservationIgnored private var lastDesktopActivity = Date()
+    @ObservationIgnored private var systemSilenceWarningShown = false
     @ObservationIgnored private var preparingToRecord = false
     @ObservationIgnored private var loadingPreferences = false
 
@@ -131,6 +134,9 @@ final class RecorderModel {
         // Surface fatal capture errors to the UI.
         tap.onFatalError = { [weak self] error in
             DispatchQueue.main.async {
+                if let session = self?.currentSession {
+                    UploadStatusStore.markSystemAudioCaptureFailed(folderURL: session.folderURL, reason: error.localizedDescription)
+                }
                 self?.statusMessage = self?.text("status.desktopError", error.localizedDescription)
             }
         }
@@ -149,6 +155,9 @@ final class RecorderModel {
         }
         mic.onFatalError = { [weak self] error in
             DispatchQueue.main.async {
+                if let session = self?.currentSession {
+                    UploadStatusStore.markMicrophoneFailure(folderURL: session.folderURL, reason: error.localizedDescription)
+                }
                 self?.statusMessage = self?.text("status.micError", error.localizedDescription)
             }
         }
@@ -236,6 +245,8 @@ final class RecorderModel {
             return
         }
         currentSession = session
+        lastDesktopActivity = now
+        systemSilenceWarningShown = false
         activeMeeting = titleContext.linkedMeeting
         UploadStatusStore.writeInitial(session: session, meeting: titleContext.linkedMeeting)
 
@@ -270,6 +281,13 @@ final class RecorderModel {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.desktopLevel = meterLevel(fromDB: db)
+                if db > -60 {
+                    self.lastDesktopActivity = Date()
+                    if self.systemSilenceWarningShown {
+                        self.systemSilenceWarningShown = false
+                        if self.statusMessage == self.text("status.systemAudioNeedsCheck") { self.statusMessage = nil }
+                    }
+                }
                 self.silenceMonitor?.noteLevel(db)
             }
         }
@@ -277,6 +295,13 @@ final class RecorderModel {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.micLevel = meterLevel(fromDB: db)
+                if self.state == .recording, db > -50, !self.systemSilenceWarningShown,
+                   Date().timeIntervalSince(self.lastDesktopActivity) >= 30, let session = self.currentSession {
+                    self.systemSilenceWarningShown = true
+                    self.statusMessage = self.text("status.systemAudioNeedsCheck")
+                    UploadStatusStore.appendLog(folderURL: session.folderURL,
+                        "System audio has been quiet for 30s while microphone is active; check remote audio. Tap is kept running.")
+                }
                 self.silenceMonitor?.noteLevel(db)
             }
         }
@@ -325,6 +350,7 @@ final class RecorderModel {
             tap.setPaused(false)
             mic.setPaused(false)
             silenceMonitor?.start()
+            lastDesktopActivity = Date()
             state = .recording
         case .idle:
             break
@@ -377,10 +403,18 @@ final class RecorderModel {
                     )
                     UploadStatusStore.markSaved(job: job)
                     UploadStatusStore.markSystemAudioCapture(folderURL: folderURL, metadata: desktopResult.systemAudio)
+                    if let reason = micResult.failureReason {
+                        UploadStatusStore.markMicrophoneFailure(folderURL: folderURL, reason: reason)
+                    }
                     if let audioQuality {
                         UploadStatusStore.markAudioQuality(folderURL: folderURL, report: audioQuality)
                     }
-                    let integrity = audioQuality.map { RecorderModel.captureIntegrity(for: $0) } ?? .passed()
+                    let integrity = RecordingAcceptance.evaluate(
+                        quality: audioQuality,
+                        capture: desktopResult.systemAudio,
+                        desktop: desktopResult,
+                        microphone: micResult
+                    )
                     UploadStatusStore.markCaptureIntegrity(folderURL: folderURL, integrity: integrity)
                     self.lastUploadJob = job
                     if integrity.requiresUploadConfirmation {
@@ -390,7 +424,7 @@ final class RecorderModel {
                         self.statusMessage = self.text("status.savedSystemMissing", outputURL.lastPathComponent)
                     } else if self.autoUploadAfterSave {
                         self.statusMessage = self.text("status.saved", outputURL.lastPathComponent)
-                        self.startUpload(job)
+                        self.startUpload(job, knownIntegrity: integrity)
                     } else {
                         self.uploadState = .idle
                         self.statusMessage = self.text("status.savedAutoOff", outputURL.lastPathComponent)
@@ -617,7 +651,7 @@ final class RecorderModel {
             return
         }
         UploadStatusStore.appendLog(folderURL: job.folderURL, "User confirmed upload despite degraded recording acceptance.")
-        startUpload(job)
+        startUpload(job, confirmedDegraded: true)
     }
 
     func uploadExisting(_ entry: RecordingEntry) {
@@ -639,7 +673,8 @@ final class RecorderModel {
         startUpload(job)
     }
 
-    private func startUpload(_ job: FeishuUploadJob) {
+    private func startUpload(_ job: FeishuUploadJob, knownIntegrity: CaptureIntegrity? = nil, confirmedDegraded: Bool = false) {
+        guard activeUploadFolders.insert(job.folderURL).inserted else { return }
         lastUploadJob = job
         uploadState = .running
         lastMinuteURL = nil
@@ -651,7 +686,36 @@ final class RecorderModel {
         let shouldOpen = openMinuteURLAfterUpload
 
         Task { [weak self] in
+            defer { self?.activeUploadFolders.remove(job.folderURL) }
             do {
+                // Library uploads and retries must pass the same gate as a freshly saved recording.
+                // Existing Minutes only need artifact retrieval, so no new audio leaves the device.
+                let metadata = UploadStatusStore.readMetadata(folderURL: job.folderURL)
+                if metadata == nil, FileManager.default.fileExists(atPath: job.folderURL.appendingPathComponent("metadata.json").path) {
+                    throw FeishuUploadError.checkpoint("上传记录无法读取，请保留 metadata.json 并检查后重试。")
+                }
+                if !confirmedDegraded && metadata?.minuteToken == nil {
+                    let integrity: CaptureIntegrity
+                    if let knownIntegrity { integrity = knownIntegrity }
+                    else {
+                        let quality = await Task.detached(priority: .utility) {
+                            try? AudioQualityAnalyzer.analyze(audioURL: job.audioURL)
+                        }.value
+                        if let quality { UploadStatusStore.markAudioQuality(folderURL: job.folderURL, report: quality) }
+                        let desktop = RecordingAcceptance.rawCapture(at: job.folderURL.appendingPathComponent("desktop.caf"))
+                        let mic = RecordingAcceptance.rawCapture(at: job.folderURL.appendingPathComponent("mic.caf"),
+                                                                 failureReason: metadata?.microphoneCaptureFailure)
+                        integrity = RecordingAcceptance.evaluate(quality: quality, capture: metadata?.systemAudioCapture,
+                                                                 desktop: desktop, microphone: mic)
+                        UploadStatusStore.markCaptureIntegrity(folderURL: job.folderURL, integrity: integrity)
+                    }
+                    if integrity.requiresUploadConfirmation {
+                        self?.uploadState = .needsConfirmation(self?.text("capture.degraded") ?? integrity.issues.joined(separator: " "))
+                        self?.statusMessage = self?.text("status.savedSystemMissing", job.audioURL.lastPathComponent) ?? ""
+                        self?.refreshRecordings()
+                        return
+                    }
+                }
                 let uploader = FeishuCLIUploader(cliPath: cliPath, fetchNotes: fetchNotes)
                 let result = try await uploader.upload(job: job)
                 await MainActor.run {
@@ -759,14 +823,4 @@ final class RecorderModel {
         return error.localizedDescription
     }
 
-    private static func captureIntegrity(for report: AudioQualityReport) -> CaptureIntegrity {
-        let leftSilent = report.leftDesktopRMSDB < -80 && report.leftDesktopPeakDB < -60
-        let micActive = report.rightMicRMSDB > -80 || report.rightMicPeakDB > -60
-        if leftSilent && micActive {
-            return .degraded(issues: [
-                "Only microphone channel looks active; desktop/system channel is silent."
-            ])
-        }
-        return .passed()
-    }
 }

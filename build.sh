@@ -26,7 +26,11 @@ else
 fi
 
 echo "==> swift build -c release"
-swift build -c release
+BUILD_ARGS=()
+if [ -n "${SDKROOT:-}" ]; then
+    BUILD_ARGS+=(--sdk "$SDKROOT")
+fi
+swift build -c release "${BUILD_ARGS[@]}"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
@@ -35,6 +39,12 @@ mkdir -p "$RESOURCES"
 
 cp ".build/release/Recorder" "$MACOS/Recorder"
 cp "Info.plist" "$CONTENTS/Info.plist"
+REVISION="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git diff --quiet -- Sources build.sh Info.plist; then
+    REVISION="$REVISION+dirty"
+fi
+/usr/libexec/PlistBuddy -c "Add :RecorderBuildRevision string $REVISION" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :RecorderBuildDate string $(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$CONTENTS/Info.plist"
 
 # App icon (built from assets/recorder1-logo.svg via make-icon.sh). Optional: skip if absent.
 if [ -f "Recorder.icns" ]; then

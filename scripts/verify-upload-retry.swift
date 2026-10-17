@@ -12,8 +12,8 @@ enum ProbeError: LocalizedError {
     }
 }
 
-func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
-    guard condition() else { throw ProbeError.failed(message) }
+func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
+    guard try condition() else { throw ProbeError.failed(message) }
 }
 
 func requireFile(_ url: URL, _ message: String) throws {
@@ -35,6 +35,12 @@ struct UploadRetryProbe {
     private static func run() async throws {
         let args = CommandLine.arguments
         try require(args.count == 3, "usage: verify-upload-retry <work-folder> <fake-lark-cli>")
+
+        let cliEnvironment = CLIProcessRunner.processEnvironment()
+        try require(
+            cliEnvironment["LARK_CLI_NO_PROXY"] == "1",
+            "lark-cli proxy bypass was not enabled"
+        )
 
         let folderURL = URL(fileURLWithPath: args[1], isDirectory: true)
         let fakeCLIPath = args[2]
@@ -136,5 +142,114 @@ struct UploadRetryProbe {
             .split(separator: "\n")
             .filter { $0.contains("drive +upload") && $0.contains(expectedUploadArg) }
         try require(driveCalls.count == 2, "expected two drive uploads using \(job.uploadFileName), saw \(driveCalls.count)")
+
+        for scenario in ["fail-drive-network-once", "always-drive-network", "fail-minute-service-once",
+                         "fail-minute-auth-once", "fail-minute-network-once", "fail-notes-once", "not-ready-once",
+                         "crash-drive-after-create", "crash-minute-after-create"] {
+            let destination = folderURL.appendingPathComponent(scenario)
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            let audio = destination.appendingPathComponent("audio.m4a")
+            try originalAudio.write(to: audio)
+            let scenarioJob = FeishuUploadJob(audioURL: audio, folderURL: destination,
+                meetingTitle: "Probe", titleSource: .manual, calendarEventTitle: nil, attendees: [], startedAt: startedAt, endedAt: endedAt)
+            UploadStatusStore.markSaved(job: scenarioJob)
+            try Data().write(to: destination.appendingPathComponent(scenario))
+            var fast = uploader
+            fast.retryDelayNanoseconds = 0
+            fast.notesDelayNanoseconds = 0
+            var failed = false
+            do { _ = try await fast.upload(job: scenarioJob) }
+            catch { failed = true; UploadStatusStore.markFailed(job: scenarioJob, error: error) }
+            let shouldFail = ["always-drive-network", "fail-minute-auth-once", "fail-minute-network-once",
+                              "crash-drive-after-create", "crash-minute-after-create"].contains(scenario)
+            try require(failed == shouldFail, "unexpected failure outcome for \(scenario)")
+            func calls(_ command: String) throws -> Int {
+                try String(contentsOf: destination.appendingPathComponent("fake-lark-invocations.log"), encoding: .utf8)
+                    .split(separator: "\n").filter { $0.contains(":: \(command)") }.count
+            }
+            if scenario == "fail-drive-network-once" { try require(try calls("drive +upload") == 2, "EOF was not retried") }
+            if scenario == "always-drive-network" { try require(try calls("drive +upload") == 3, "retry budget was not bounded") }
+            if scenario == "fail-minute-service-once" {
+                try require(try calls("drive +upload") == 1, "minute retry duplicated Drive upload")
+                try require(try calls("minutes +upload") == 2, "2091006 was not retried")
+            }
+            if scenario == "fail-minute-auth-once" {
+                try require(try calls("minutes +upload") == 1, "authorization error was automatically retried")
+                try Data().write(to: destination.appendingPathComponent("missing-file"))
+                do { _ = try await fast.upload(job: scenarioJob); throw ProbeError.failed("inaccessible file was reused") }
+                catch let error as ProbeError { throw error }
+                catch { }
+                try require(try calls("minutes +upload") == 1 && calls("drive +upload") == 1,
+                            "inaccessible checkpoint caused a new cloud object")
+                try fm.removeItem(at: destination.appendingPathComponent("missing-file"))
+                _ = try await fast.upload(job: scenarioJob)
+                try require(try calls("drive +upload") == 1, "resume duplicated an existing file")
+                try require(try calls("drive metas") == 2, "resume did not validate the file")
+            }
+            if scenario == "fail-minute-network-once" {
+                do { _ = try await fast.upload(job: scenarioJob); throw ProbeError.failed("ambiguous creation was replayed") }
+                catch let error as ProbeError { throw error }
+                catch { }
+                try require(try calls("minutes +upload") == 1, "uncertain create request was repeated")
+            }
+            if scenario.hasPrefix("crash-") {
+                let drive = scenario == "crash-drive-after-create"
+                let command = drive ? "drive +upload" : "minutes +upload"
+                try requireFile(destination.appendingPathComponent(drive ? "remote-drive-created" : "remote-minute-created"),
+                                "crash fixture did not simulate remote creation")
+                try require(UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == (drive ? "drive_result_unknown" : "minute_result_unknown"),
+                            "CLI crash was not saved as an unknown creation result")
+                do { _ = try await fast.upload(job: scenarioJob); throw ProbeError.failed("crashed creation was replayed") }
+                catch let error as ProbeError { throw error }
+                catch { }
+                try require(try calls(command) == 1, "retry duplicated a remotely created artifact after a CLI crash")
+            }
+            if scenario == "fail-notes-once" {
+                try require(UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == "notes_pending", "notes failure checkpoint missing")
+                _ = try await fast.upload(job: scenarioJob)
+                try require(try calls("drive +upload") == 1 && calls("minutes +upload") == 1, "notes retry duplicated creation")
+                try require(try calls("minutes minutes") == 1, "existing minute was not validated")
+            }
+            if !shouldFail {
+                try Data("modified audio".utf8).write(to: audio)
+                do { _ = try await fast.upload(job: scenarioJob); throw ProbeError.failed("changed audio reused a checkpoint") }
+                catch let error as ProbeError { throw error }
+                catch { }
+            }
+            print("PASS \(scenario)")
+        }
+        let corruptFolder = folderURL.appendingPathComponent("corrupt-metadata")
+        try fm.createDirectory(at: corruptFolder, withIntermediateDirectories: true)
+        let corruptAudio = corruptFolder.appendingPathComponent("audio.m4a")
+        try originalAudio.write(to: corruptAudio)
+        let corruptURL = corruptFolder.appendingPathComponent("metadata.json")
+        let corruptData = Data("{\"file_token\":\"previously-uploaded-file\",\"truncated\":".utf8)
+        try corruptData.write(to: corruptURL)
+        let corruptJob = FeishuUploadJob(audioURL: corruptAudio, folderURL: corruptFolder, meetingTitle: "Probe",
+            attendees: [], startedAt: startedAt, endedAt: endedAt)
+        // These are the writes the recording-library acceptance path performs before upload.
+        UploadStatusStore.markAudioQuality(folderURL: corruptFolder, report: AudioQualityReport(
+            durationSeconds: 60, sampleRate: 48_000, channelCount: 2,
+            leftDesktopRMSDB: -20, rightMicRMSDB: -20, leftDesktopPeakDB: -10, rightMicPeakDB: -10, warnings: []))
+        UploadStatusStore.markCaptureIntegrity(folderURL: corruptFolder, integrity: .passed())
+        try require(try Data(contentsOf: corruptURL) == corruptData, "acceptance overwrote unreadable upload metadata")
+        do { try UploadStatusStore.checkpoint(folderURL: corruptFolder, stage: "preparing"); throw ProbeError.failed("corrupt checkpoint accepted") }
+        catch let error as ProbeError { throw error }
+        catch { }
+        do { _ = try await uploader.upload(job: corruptJob); throw ProbeError.failed("corrupt metadata allowed upload") }
+        catch let error as ProbeError { throw error }
+        catch { UploadStatusStore.markFailed(job: corruptJob, error: error) }
+        try require(try Data(contentsOf: corruptURL) == corruptData, "failure handler overwrote unreadable upload metadata")
+        try require(!fm.fileExists(atPath: corruptFolder.appendingPathComponent("fake-lark-invocations.log").path),
+                    "corrupt upload metadata reached the CLI")
+        print("PASS corrupt metadata survives acceptance and blocks upload before CLI execution")
+        let executable = CLIExecutable(url: URL(fileURLWithPath: fakeCLIPath), prefixArguments: [])
+        do {
+            _ = try await CLIProcessRunner(timeoutSeconds: 0.3).run(executable: executable, arguments: ["probe", "sleep"], workingDirectory: folderURL)
+            throw ProbeError.failed("timeout did not stop CLI")
+        } catch CLIProcessError.timedOut { }
+        let pid = Int32(try String(contentsOf: folderURL.appendingPathComponent("sleep.pid"), encoding: .utf8))!
+        try require(kill(pid, 0) == -1 && errno == ESRCH, "timed-out CLI is still running")
+        print("PASS timed-out native CLI is terminated")
     }
 }

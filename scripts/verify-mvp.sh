@@ -176,7 +176,7 @@ if LARK_CLI="$(resolve_lark_cli)"; then
   pass "lark-cli resolved: $LARK_CLI"
   "$LARK_CLI" --version || warn "could not print lark-cli version"
 
-  REQUIRED_SCOPES="drive:file:upload minutes:minutes.upload:write vc:note:read minutes:minutes:readonly minutes:minutes.artifacts:read minutes:minutes.transcript:export"
+  REQUIRED_SCOPES="drive:file:upload drive:drive.metadata:readonly minutes:minutes.upload:write vc:note:read minutes:minutes:readonly minutes:minutes.artifacts:read"
   if "$LARK_CLI" auth check --scope "$REQUIRED_SCOPES" --json >/tmp/recorder1-lark-auth.json; then
     pass "required Feishu scopes are available"
   else
