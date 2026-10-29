@@ -14,6 +14,10 @@ final class RecorderModel {
     var desktopLevel: Float = 0      // 0..1 meter (LEFT / desktop)
     var micLevel: Float = 0          // 0..1 meter (RIGHT / mic)
     var meetings: [Meeting] = []
+    var calendarState: CalendarLoadState = .loading
+    @ObservationIgnored private var calendarRefresh: Task<Void, Never>?
+    @ObservationIgnored private var calendarTimer: Timer?
+    @ObservationIgnored private var didInitialize = false
     var detectedMeeting: Meeting? = nil
     var recordingTitleDraft: RecordingTitleDraft = .empty
     var currentSession: RecordingSession? = nil
@@ -99,6 +103,8 @@ final class RecorderModel {
     // MARK: - Lifecycle
 
     func onAppear() {
+        guard !didInitialize else { refreshMeetings(); return }
+        didInitialize = true
         // Load persisted preferences first so the UI reflects them immediately.
         loadPreferences()
 
@@ -109,9 +115,9 @@ final class RecorderModel {
         // Request calendar access and load meetings. Microphone permission is
         // requested only when the user starts recording so the system prompt is
         // tied to an explicit action.
-        Task { @MainActor in
-            _ = await calendar.requestAccess()
-            refreshMeetings()
+        refreshMeetings(requestAccess: true)
+        calendarTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshMeetings() }
         }
         Task { @MainActor in
             await notifications.requestAuthorization()
@@ -151,6 +157,16 @@ final class RecorderModel {
                 guard let self, let session = self.currentSession else { return }
                 UploadStatusStore.markSystemAudioCaptureFailed(folderURL: session.folderURL, reason: reason)
                 self.statusMessage = self.text("status.systemAudioSilent")
+            }
+        }
+        mic.onEvent = { [weak self] message in
+            DispatchQueue.main.async {
+                if let session = self?.currentSession { UploadStatusStore.appendLog(folderURL: session.folderURL, "Microphone: \(message)") }
+            }
+        }
+        mic.onInputChanged = { [weak self] device in
+            DispatchQueue.main.async {
+                if let session = self?.currentSession { UploadStatusStore.markMicrophoneInput(folderURL: session.folderURL, device: device) }
             }
         }
         mic.onFatalError = { [weak self] error in
@@ -210,6 +226,10 @@ final class RecorderModel {
                 return
             }
             self.refreshInputDevices()
+            if matchCurrentMeeting && meeting == nil {
+                let snapshot = await self.calendar.load(now: Date())
+                self.applyCalendarSnapshot(snapshot)
+            }
             self.preparingToRecord = false
             let resolvedTitle = self.resolveRecordingTitleForStart(matchCurrentMeeting: matchCurrentMeeting && meeting == nil)
             self.beginRecording(titleContext: resolvedTitle)
@@ -403,6 +423,7 @@ final class RecorderModel {
                     )
                     UploadStatusStore.markSaved(job: job)
                     UploadStatusStore.markSystemAudioCapture(folderURL: folderURL, metadata: desktopResult.systemAudio)
+                    UploadStatusStore.markMicrophoneCapture(folderURL: folderURL, metadata: micResult.microphone)
                     if let reason = micResult.failureReason {
                         UploadStatusStore.markMicrophoneFailure(folderURL: folderURL, reason: reason)
                     }
@@ -419,7 +440,7 @@ final class RecorderModel {
                     self.lastUploadJob = job
                     if integrity.requiresUploadConfirmation {
                         self.uploadState = .needsConfirmation(
-                            self.text("capture.degraded")
+                            self.captureIntegrityMessage(integrity)
                         )
                         self.statusMessage = self.text("status.savedSystemMissing", outputURL.lastPathComponent)
                     } else if self.autoUploadAfterSave {
@@ -469,11 +490,39 @@ final class RecorderModel {
         refreshRecordings()
     }
 
-    func refreshMeetings() {
-        let now = Date()
-        meetings = calendar.meetingsAroundNow(now)
-        detectedMeeting = calendar.currentMeeting(now)
+    func refreshMeetings(requestAccess: Bool = false) {
+        guard calendarRefresh == nil else { return }
+        calendarState = .loading
+        calendarRefresh = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let snapshot = await self.calendar.load(now: Date(), requestAccess: requestAccess)
+            self.applyCalendarSnapshot(snapshot)
+            self.calendarRefresh = nil
+        }
+    }
+
+    private func applyCalendarSnapshot(_ snapshot: CalendarSnapshot) {
+        calendarState = snapshot.state
+        meetings = snapshot.meetings
+        detectedMeeting = snapshot.currentMeeting
         syncRecordingTitleWithDetectedMeeting()
+    }
+
+    func openCalendarSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") { NSWorkspace.shared.open(url) }
+    }
+
+    private func captureIntegrityMessage(_ integrity: CaptureIntegrity) -> String {
+        let reasons = integrity.issues.map { issue -> String in
+            if language == .en { return issue }
+            if issue.contains("Microphone") {
+                return text(issue.localizedCaseInsensitiveContains("gap") ? "capture.micInterrupted" : "capture.micFailed")
+            }
+            if issue.contains("durations differ") { return text("capture.misaligned") }
+            if issue.contains("analysis") { return text("capture.analysisFailed") }
+            return text("capture.systemFailed")
+        }
+        return text("capture.degraded") + " " + Array(Set(reasons)).sorted().joined(separator: " ")
     }
 
     /// Best detected meeting for the main Record button. CalendarAccess prefers
@@ -524,7 +573,7 @@ final class RecorderModel {
 
     private func resolveRecordingTitleForStart(matchCurrentMeeting: Bool) -> ResolvedRecordingTitle {
         if matchCurrentMeeting {
-            let current = calendar.currentMeeting(Date())
+            let current = detectedMeeting
             detectedMeeting = current
             if let current {
                 if recordingTitleDraft.userEdited {
@@ -589,14 +638,10 @@ final class RecorderModel {
     private func describeCaptureError(_ error: Error) -> String {
         if let micError = error as? MicCapture.MicError {
             switch micError {
-            case .couldNotCreateFile(_, let underlying):
-                return text("error.micFile", underlying.localizedDescription)
             case .invalidInputFormat:
                 return text("error.invalidMicFormat")
             case .inputDeviceUnavailable(let uid):
                 return text("error.inputDeviceUnavailable", uid)
-            case .setInputDeviceFailed(let uid, let status):
-                return text("error.setInputDeviceFailed", uid, "\(status)")
             }
         }
         return error.localizedDescription
@@ -702,15 +747,17 @@ final class RecorderModel {
                             try? AudioQualityAnalyzer.analyze(audioURL: job.audioURL)
                         }.value
                         if let quality { UploadStatusStore.markAudioQuality(folderURL: job.folderURL, report: quality) }
-                        let desktop = RecordingAcceptance.rawCapture(at: job.folderURL.appendingPathComponent("desktop.caf"))
+                        let desktop = RecordingAcceptance.rawCapture(at: job.folderURL.appendingPathComponent("desktop.caf"),
+                            firstHostTime: metadata?.systemAudioCapture?.firstHostTime)
                         let mic = RecordingAcceptance.rawCapture(at: job.folderURL.appendingPathComponent("mic.caf"),
-                                                                 failureReason: metadata?.microphoneCaptureFailure)
+                                                                 failureReason: metadata?.microphoneCaptureFailure,
+                            firstHostTime: metadata?.microphoneCapture?.firstHostTime)
                         integrity = RecordingAcceptance.evaluate(quality: quality, capture: metadata?.systemAudioCapture,
                                                                  desktop: desktop, microphone: mic)
                         UploadStatusStore.markCaptureIntegrity(folderURL: job.folderURL, integrity: integrity)
                     }
                     if integrity.requiresUploadConfirmation {
-                        self?.uploadState = .needsConfirmation(self?.text("capture.degraded") ?? integrity.issues.joined(separator: " "))
+                        self?.uploadState = .needsConfirmation(self?.captureIntegrityMessage(integrity) ?? integrity.issues.joined(separator: " "))
                         self?.statusMessage = self?.text("status.savedSystemMissing", job.audioURL.lastPathComponent) ?? ""
                         self?.refreshRecordings()
                         return

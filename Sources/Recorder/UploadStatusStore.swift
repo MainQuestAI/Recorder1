@@ -25,6 +25,7 @@ struct RecordingMetadata: Codable, Equatable {
     var uploadStage: String? = nil
     var uploadAudioSHA256: String? = nil
     var microphoneCaptureFailure: String? = nil
+    var microphoneCapture: MicrophoneCaptureMetadata? = nil
 
     enum CodingKeys: String, CodingKey {
         case meetingTitle = "meeting_title"
@@ -51,6 +52,7 @@ struct RecordingMetadata: Codable, Equatable {
         case uploadStage = "upload_stage"
         case uploadAudioSHA256 = "upload_audio_sha256"
         case microphoneCaptureFailure = "microphone_capture_failure"
+        case microphoneCapture = "microphone_capture"
     }
 }
 
@@ -159,6 +161,12 @@ enum UploadStatusStore {
             folderURL: folderURL,
             "Microphone input: device=\(device.name) uid=\(device.uid) sample_rate=\(device.sampleRate) channels=\(device.inputChannelCount) default=\(device.isDefault)"
         )
+    }
+
+    static func markMicrophoneCapture(folderURL: URL, metadata: MicrophoneCaptureMetadata?) {
+        guard let metadata else { return }
+        update(folderURL: folderURL) { $0.microphoneCapture = metadata }
+        appendLog(folderURL: folderURL, "Microphone inserted_silence_frames=\(metadata.insertedSilenceFrames)")
     }
 
     static func markMicrophoneFailure(folderURL: URL, reason: String) {

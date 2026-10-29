@@ -561,7 +561,28 @@ struct RecorderPanel: View {
                 .help(model.text("help.refreshMeetings"))
             }
 
-            if model.meetings.isEmpty {
+            if model.calendarState != .ready {
+                VStack(alignment: .leading, spacing: 8) {
+                    switch model.calendarState {
+                    case .loading:
+                        ProgressView(model.text("calendar.loading"))
+                    case .accessRequired:
+                        Text(model.text("calendar.accessRequired"))
+                        Button(model.text("calendar.allow")) { model.refreshMeetings(requestAccess: true) }
+                    case .denied:
+                        Text(model.text("calendar.denied"))
+                        Button(model.text("calendar.settings")) { model.openCalendarSettings() }
+                    case .restricted:
+                        Text(model.text("calendar.restricted"))
+                    case .failed(let message):
+                        Text(model.text("calendar.failed") + " " + message)
+                        Button(model.text("calendar.retry")) { model.refreshMeetings(requestAccess: true) }
+                    case .ready: EmptyView()
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(MQTheme.textMuted)
+            } else if model.meetings.isEmpty {
                 Text(model.text("text.noMeetings"))
                     .font(.caption)
                     .foregroundStyle(MQTheme.textMuted)

@@ -31,5 +31,8 @@ jobs:
       - name: Verify audio integrity acceptance
         run: bash scripts/verify-audio-integrity.sh
 
+      - name: Verify capture timeline and calendar authorization
+        run: bash scripts/verify-route-calendar.sh
+
       - name: Verify retention cleanup
         run: bash scripts/verify-retention-cleanup.sh

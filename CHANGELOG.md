@@ -4,6 +4,16 @@ All notable Recorder1 changes will be documented in this file.
 
 The format follows the spirit of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses human-readable release notes rather than strict semantic versioning while it is in MVP stage.
 
+## 1.0.2 (2026-10-29)
+
+### Fixed
+
+- Capture microphones through an input-only session so playback route changes do not rebuild a microphone playback unit. Keep explicit input selection, follow default input changes, and bound stalled-input recovery.
+- Preserve system audio timestamps through silent output periods and rate changes, include trailing silence, and compare aligned track endpoints for integrity checks.
+- Preserve the full microphone sample timestamp gap with bounded silence writes, keep pause/resume aligned, and record capture gaps and device changes. Missing audio still requires upload review.
+- Show microphone capture problems in the integrity warning instead of always suggesting system audio is missing.
+- Include the Calendar entitlement in signed builds, gate queries on full access, show authorization failures, and use one refreshed snapshot for the meeting list and recording title.
+
 ## Unreleased
 
 ### Fixed

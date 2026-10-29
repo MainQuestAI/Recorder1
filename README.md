@@ -271,7 +271,7 @@ Key source files:
 | `RecorderModel.swift` | Main state machine for recording, mixing, upload, retry, and cleanup. |
 | `RecorderPanel.swift` | Menu-bar UI. |
 | `SystemAudioTap.swift` | Core Audio system-output capture, fallback, route-change handling, and metadata. |
-| `MicCapture.swift` | AVAudioEngine microphone capture and input-device selection. |
+| `MicCapture.swift` | Input-only AVCaptureSession microphone capture and input-device selection. |
 | `StereoMixer.swift` | Aligns raw channels and writes the stereo AAC output. |
 | `FeishuCLIUploader.swift` | Runs the Feishu `lark-cli` upload flow. |
 | `FeishuMinutesParser.swift` | Parses CLI JSON and extracts Feishu Minutes artifacts. |

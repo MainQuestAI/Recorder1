@@ -1,201 +1,92 @@
 import Foundation
 import EventKit
+import os
 
-/// EventKit access wrapper.
-///
-/// Owns a single, long-lived `EKEventStore` (releasing it would invalidate every
-/// `EKEvent`/`EKCalendar` it vended) and exposes a small, UI-friendly surface:
-/// permission, a "meetings around now" window, and a best-guess "current meeting"
-/// used to name recording folders.
-///
-/// The whole type is `@MainActor`: all reads happen on the main thread, and the
-/// `.EKEventStoreChanged` observer hops back to main before invoking `onChange`.
+enum CalendarLoadState: Equatable {
+    case loading, ready, accessRequired, denied, restricted
+    case failed(String)
+}
+
+struct CalendarSnapshot {
+    var state: CalendarLoadState
+    var meetings: [Meeting] = []
+    var currentMeeting: Meeting?
+}
+
+/// One permission-gated query supplies both the nearby list and recording title.
 @MainActor
 final class CalendarAccess {
-
-    /// Wired by the model to `.EKEventStoreChanged`. Invoked on MAIN whenever
-    /// calendar data changes anywhere on the system (so cached events may be stale).
     var onChange: (() -> Void)?
-
-    /// One store for the app's lifetime — see note above.
-    private let store = EKEventStore()
-
-    /// Observer token for `.EKEventStoreChanged`; removed on deinit.
+    private let store: EKEventStore
+    private let authorization: () -> EKAuthorizationStatus
+    private let request: () async throws -> Bool
+    private let fetch: (Date, Date) -> [Meeting]
     private var changeObserver: NSObjectProtocol?
+    private static let log = Logger(subsystem: "com.dingcheng.Recorder1", category: "Calendar")
 
-    // Window around "now" used for fetching (research-notes: eventkit-calendar §2).
-    private let windowBack: TimeInterval = -2 * 3600   // 2 hours behind
-    private let windowForward: TimeInterval = 8 * 3600 // 8 hours ahead
-
-    init() {
-        // Re-fetch whenever the system reports a calendar change. Observe on the
-        // main queue; the closure isn't @MainActor-isolated, so hop explicitly
-        // before touching our (main-actor) callback.
-        changeObserver = NotificationCenter.default.addObserver(
-            forName: .EKEventStoreChanged,
-            object: store,
-            queue: .main
-        ) { [weak self] _ in
-            // Already on the main queue, but assert MainActor isolation for Swift's
-            // concurrency checker and to be safe if the queue assumption ever changes.
-            Task { @MainActor [weak self] in
-                self?.onChange?()
+    init(store: EKEventStore = EKEventStore(),
+         authorization: @escaping () -> EKAuthorizationStatus = { EKEventStore.authorizationStatus(for: .event) },
+         request: (() async throws -> Bool)? = nil,
+         fetch: ((Date, Date) -> [Meeting])? = nil) {
+        self.store = store
+        self.authorization = authorization
+        self.request = request ?? { try await store.requestFullAccessToEvents() }
+        self.fetch = fetch ?? { start, end in
+            store.refreshSourcesIfNecessary()
+            let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+            return store.events(matching: predicate).compactMap { event in
+                guard !event.isAllDay, let title = event.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !title.isEmpty, let start = event.startDate, let end = event.endDate else { return nil }
+                let participants = [event.organizer].compactMap { $0 } + (event.attendees ?? [])
+                var seen = Set<String>()
+                let attendees = participants.compactMap { participant -> String? in
+                    let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let value = name?.isEmpty == false ? name! : participant.url.absoluteString.replacingOccurrences(of: "mailto:", with: "")
+                    return !value.isEmpty && seen.insert(value.lowercased()).inserted ? value : nil
+                }
+                return Meeting(id: event.eventIdentifier ?? "\(title)|\(start.timeIntervalSince1970)",
+                    title: title, start: start, end: end, attendees: Array(attendees.prefix(25)))
             }
+        }
+        changeObserver = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.onChange?() }
         }
     }
 
     deinit {
-        if let token = changeObserver {
-            NotificationCenter.default.removeObserver(token)
-        }
+        if let changeObserver { NotificationCenter.default.removeObserver(changeObserver) }
     }
 
-    // MARK: - Authorization
-
-    /// Requests full calendar access (write-only cannot read existing events).
-    /// Switches on the `EKAuthorizationStatus` CASE — never the raw value, because
-    /// `.authorized` and `.fullAccess` collide on raw value 3.
-    func requestAccess() async -> Bool {
-        switch EKEventStore.authorizationStatus(for: .event) {
-        case .fullAccess:
-            return true
-        case .notDetermined:
+    func load(now: Date, requestAccess: Bool = false) async -> CalendarSnapshot {
+        let status = authorization()
+        switch status {
+        case .fullAccess: break
+        case .notDetermined, .writeOnly:
+            guard requestAccess else { return CalendarSnapshot(state: .accessRequired) }
             do {
-                return try await store.requestFullAccessToEvents()
+                let granted = try await request()
+                Self.log.info("Full calendar access request granted=\(granted)")
+                guard granted, authorization() == .fullAccess else { return CalendarSnapshot(state: .denied) }
             } catch {
-                return false
+                Self.log.error("Calendar authorization failed: \(error.localizedDescription, privacy: .public)")
+                return CalendarSnapshot(state: .failed(error.localizedDescription))
             }
-        case .writeOnly, .denied, .restricted, .authorized:
-            // .writeOnly can't read; the rest require a Settings change by the user.
-            // (.authorized is the deprecated legacy alias; treat it as no read grant
-            //  under the new model and fall through to a fresh request path is N/A
-            //  here since it implies a prior legacy grant — return false to be safe.)
-            return false
-        @unknown default:
-            return false
+        case .restricted: return CalendarSnapshot(state: .restricted)
+        default: return CalendarSnapshot(state: .denied)
         }
-    }
-
-    // MARK: - Fetching
-
-    /// Timed meetings overlapping a (now-2h .. now+8h) window, across all calendars.
-    /// Drops all-day and empty-title events, sorts by start, dedups by
-    /// `eventIdentifier`, and returns roughly the last 2 + current + next 2.
-    func meetingsAroundNow(_ now: Date) -> [Meeting] {
-        let start = now.addingTimeInterval(windowBack)
-        let end = now.addingTimeInterval(windowForward)
-
-        // nil = all calendars. The predicate matches any event OVERLAPPING the window.
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-        // events(matching:) is synchronous and returns events in no guaranteed order.
-        let events = store.events(matching: predicate)
-
+        // Permission may be revoked while a request was suspended; never query without it.
+        guard authorization() == .fullAccess else { return CalendarSnapshot(state: .denied) }
+        let start = now.addingTimeInterval(-2 * 3600)
+        let end = now.addingTimeInterval(8 * 3600)
         var seen = Set<String>()
-        let meetings: [Meeting] = events
-            .filter { !$0.isAllDay }                       // drop all-day
-            .filter { ($0.title?.isEmpty == false) }       // drop untitled
-            .sorted { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
-            .compactMap { ev -> Meeting? in
-                guard let s = ev.startDate, let e = ev.endDate else { return nil }
-                // Dedup on the real event identifier (recurring/synced calendars can
-                // surface duplicates). Fall back to title+start when none is present.
-                let dedupKey = ev.eventIdentifier
-                    ?? "\(ev.title ?? "")|\(s.timeIntervalSince1970)"
-                guard seen.insert(dedupKey).inserted else { return nil }
-
-                let id = ev.eventIdentifier ?? UUID().uuidString
-                return Meeting(id: id, title: ev.title ?? "Untitled", start: s, end: e,
-                               attendees: self.attendeeNames(ev))
-            }
-
-        return trimmedAroundNow(meetings, now: now)
-    }
-
-    /// The meeting "happening now or most recently started" — the best default for
-    /// naming a recording folder: in-progress, else most-recently-started, else the
-    /// next upcoming.
-    func currentMeeting(_ now: Date) -> Meeting? {
-        // Fetch the full (untrimmed) sorted set so the choice isn't skewed by trimming.
-        let all = sortedMeetings(now: now)
-        return all.last(where: { $0.isInProgress(now) })   // in progress
-            ?? all.last(where: { $0.start <= now })         // most recently started
-            ?? all.first                                    // else next upcoming
-    }
-
-    // MARK: - Helpers
-
-    /// Best-effort display names of the organizer + invitees, for recording
-    /// metadata. Falls back to the email local-part when a participant has no
-    /// display name; dedups case-insensitively and caps the list.
-    private func attendeeNames(_ ev: EKEvent) -> [String] {
-        var names: [String] = []
-        if let organizer = ev.organizer, let name = displayName(organizer) {
-            names.append(name)
-        }
-        for participant in ev.attendees ?? [] {
-            if let name = displayName(participant) {
-                names.append(name)
-            }
-        }
-        var seen = Set<String>()
-        let unique = names.filter { seen.insert($0.lowercased()).inserted }
-        return Array(unique.prefix(25))
-    }
-
-    /// A participant's display name, or its email local-part, or nil.
-    private func displayName(_ participant: EKParticipant) -> String? {
-        if let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            return name
-        }
-        let urlString = participant.url.absoluteString
-        if urlString.lowercased().hasPrefix("mailto:") {
-            let email = String(urlString.dropFirst("mailto:".count))
-            if !email.isEmpty { return email }
-        }
-        return nil
-    }
-
-    /// Full window of qualifying meetings, sorted by start, deduped — without the
-    /// last2/current/next2 trim. Used by `currentMeeting`.
-    private func sortedMeetings(now: Date) -> [Meeting] {
-        let start = now.addingTimeInterval(windowBack)
-        let end = now.addingTimeInterval(windowForward)
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-        let events = store.events(matching: predicate)
-
-        var seen = Set<String>()
-        return events
-            .filter { !$0.isAllDay }
-            .filter { ($0.title?.isEmpty == false) }
-            .sorted { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) }
-            .compactMap { ev -> Meeting? in
-                guard let s = ev.startDate, let e = ev.endDate else { return nil }
-                let dedupKey = ev.eventIdentifier
-                    ?? "\(ev.title ?? "")|\(s.timeIntervalSince1970)"
-                guard seen.insert(dedupKey).inserted else { return nil }
-                let id = ev.eventIdentifier ?? UUID().uuidString
-                return Meeting(id: id, title: ev.title ?? "Untitled", start: s, end: e,
-                               attendees: self.attendeeNames(ev))
-            }
-    }
-
-    /// From a start-sorted list, keep ~the last 2 finished/started + the in-progress
-    /// one + the next 2 upcoming, so the UI shows a focused slice around "now".
-    private func trimmedAroundNow(_ meetings: [Meeting], now: Date) -> [Meeting] {
-        guard !meetings.isEmpty else { return [] }
-
-        // Partition by relationship to "now".
-        let past = meetings.filter { $0.end < now }                       // already finished
-        let current = meetings.filter { $0.isInProgress(now) }            // happening now
-        let upcoming = meetings.filter { $0.start > now && $0.end >= now } // not yet started
-
-        let lastTwoPast = Array(past.suffix(2))
-        let nextTwoUpcoming = Array(upcoming.prefix(2))
-
-        // Reassemble in chronological order and dedup defensively (a meeting could,
-        // in edge cases, satisfy more than one partition due to boundary equality).
-        var seen = Set<String>()
-        let combined = (lastTwoPast + current + nextTwoUpcoming).filter { seen.insert($0.id).inserted }
-        return combined.sorted { $0.start < $1.start }
+        let all = fetch(start, end).filter { $0.start <= end && $0.end >= start && seen.insert($0.id).inserted }
+            .sorted { $0.start < $1.start }
+        let current = all.last(where: { $0.isInProgress(now) })
+            ?? all.last(where: { $0.start <= now }) ?? all.first
+        let past = Array(all.filter { $0.end < now }.suffix(2))
+        let ongoing = all.filter { $0.isInProgress(now) }
+        let upcoming = Array(all.filter { $0.start > now }.prefix(2))
+        Self.log.info("Calendar loaded meetings=\(all.count)")
+        return CalendarSnapshot(state: .ready, meetings: (past + ongoing + upcoming).sorted { $0.start < $1.start }, currentMeeting: current)
     }
 }

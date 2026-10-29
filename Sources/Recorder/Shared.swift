@@ -56,19 +56,22 @@ struct CaptureResult {
     /// Optional desktop/system-audio capture metadata. Mic captures leave this nil.
     var systemAudio: SystemAudioCaptureMetadata?
     var failureReason: String?
+    var microphone: MicrophoneCaptureMetadata?
 
     init(
         firstHostTime: UInt64? = nil,
         sampleRate: Double = 0,
         frameCount: AVAudioFramePosition = 0,
         systemAudio: SystemAudioCaptureMetadata? = nil,
-        failureReason: String? = nil
+        failureReason: String? = nil,
+        microphone: MicrophoneCaptureMetadata? = nil
     ) {
         self.firstHostTime = firstHostTime
         self.sampleRate = sampleRate
         self.frameCount = frameCount
         self.systemAudio = systemAudio
         self.failureReason = failureReason
+        self.microphone = microphone
     }
 }
 

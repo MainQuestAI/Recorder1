@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -32,6 +33,17 @@ struct AudioIntegrityProbe {
             try require(integrity.requiresUploadConfirmation == sparse, "sparse audio was incorrectly accepted or healthy audio rejected")
             try require(!sparse || (report.leftLongestSilentSeconds ?? 0) >= 70, "continuous silence was not measured")
             if !sparse {
+                let micStart = AudioConvertNanosToHostTime(100_000_000_000)
+                let lateDesktop = AudioConvertNanosToHostTime(130_000_000_000)
+                let aligned = RecordingAcceptance.evaluate(quality: report, capture: .empty,
+                    desktop: CaptureResult(firstHostTime: lateDesktop, sampleRate: 48_000, frameCount: 48_000 * 60),
+                    microphone: CaptureResult(firstHostTime: micStart, sampleRate: 48_000, frameCount: 48_000 * 90))
+                try require(!aligned.requiresUploadConfirmation, "different onsets with aligned endpoints were incorrectly rejected")
+                let missingTail = RecordingAcceptance.evaluate(quality: report, capture: .empty,
+                    desktop: CaptureResult(firstHostTime: lateDesktop, sampleRate: 48_000, frameCount: 48_000 * 50),
+                    microphone: CaptureResult(firstHostTime: micStart, sampleRate: 48_000, frameCount: 48_000 * 90))
+                try require(missingTail.requiresUploadConfirmation, "aligned endpoint check hid an actual missing tail")
+
                 var failed = SystemAudioCaptureMetadata.empty
                 failed.systemAudioCaptureFailed = true
                 failed.lastFailureReason = "writer failure"

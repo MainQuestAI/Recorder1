@@ -1,5 +1,7 @@
 import AVFoundation
 import AudioToolbox
+import CoreAudio
+import os
 import Foundation
 
 enum SystemAudioDiagnostics {
@@ -47,6 +49,11 @@ enum SystemAudioDiagnostics {
         var error: String?
         var audioQuality: AudioQualityReport? = nil
         var integrity: CaptureIntegrity? = nil
+        var microphoneCapture: MicrophoneCaptureMetadata? = nil
+        var microphoneFailure: String? = nil
+        var microphoneFrameCount: Int64? = nil
+        var microphoneSampleRate: Double? = nil
+        var routeChanges: [SystemAudioRouteChangeEvent]? = nil
 
         enum CodingKeys: String, CodingKey {
             case ok
@@ -68,6 +75,11 @@ enum SystemAudioDiagnostics {
             case error
             case audioQuality = "audio_quality"
             case integrity
+            case microphoneCapture = "microphone_capture"
+            case microphoneFailure = "microphone_failure"
+            case microphoneFrameCount = "microphone_frame_count"
+            case microphoneSampleRate = "microphone_sample_rate"
+            case routeChanges = "route_changes"
         }
     }
 
@@ -190,11 +202,34 @@ enum SystemAudioDiagnostics {
 
         let tap = SystemAudioTap()
         let mic = MicCapture()
+        let routes = OSAllocatedUnfairLock<[SystemAudioRouteChangeEvent]>(initialState: [])
+        tap.onRouteChanged = { event in routes.withLock { $0.append(event) } }
+        mic.onEvent = { event in fputs("Microphone: \(event)\n", stderr) }
         try tap.start(writingTo: desktopURL)
-        try mic.start(writingTo: micURL)
+        let args = CommandLine.arguments
+        let inputIndex = args.firstIndex(of: "--diagnose-input-uid")
+        let inputUID = inputIndex.flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        do { try mic.start(writingTo: micURL, preferredInputDeviceUID: inputUID) }
+        catch { _ = tap.stop(); throw error }
 
         let continuity = CommandLine.arguments.contains("--diagnose-continuity")
         let started = Date()
+        if let index = args.firstIndex(of: "--diagnose-switch-output-uid"), args.indices.contains(index + 1) {
+            let originalOutput = try SystemAudioTap.outputDevice(role: .defaultOutput)
+            let originalSystem = try SystemAudioTap.outputDevice(role: .defaultSystemOutput)
+            defer {
+                do { try setOutput(originalOutput, system: false); try setOutput(originalSystem, system: true) }
+                catch { fputs("FAIL restoring output: \(error)\n", stderr) }
+            }
+            do {
+                Thread.sleep(forTimeInterval: 5)
+                let target = try outputID(uid: args[index + 1])
+                try setOutput(target, system: false); try setOutput(target, system: true)
+                Thread.sleep(forTimeInterval: 8)
+                try setOutput(originalOutput, system: false); try setOutput(originalSystem, system: true)
+                Thread.sleep(forTimeInterval: 3)
+            } catch { _ = tap.stop(); _ = mic.stop(); throw error }
+        }
         if continuity { Thread.sleep(forTimeInterval: 12) }
         usleep(500_000)
         let player = try? playDiagnosticTone(in: folder)
@@ -269,8 +304,42 @@ enum SystemAudioDiagnostics {
             systemAudioLastFailureReason: desktopCapture.systemAudio?.lastFailureReason,
             error: nil,
             audioQuality: audioQuality,
-            integrity: integrity
+            integrity: integrity,
+            microphoneCapture: micCapture.microphone,
+            microphoneFailure: micCapture.failureReason,
+            microphoneFrameCount: Int64(micCapture.frameCount),
+            microphoneSampleRate: micCapture.sampleRate,
+            routeChanges: routes.withLock { $0 }
         )
+    }
+
+    private static func setOutput(_ device: AudioObjectID, system: Bool) throws {
+        var address = AudioObjectPropertyAddress(mSelector: system ? kAudioHardwarePropertyDefaultSystemOutputDevice : kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value = device
+        let status = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+            UInt32(MemoryLayout<AudioObjectID>.size), &value)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+
+    private static func outputID(uid: String) throws -> AudioObjectID {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        var devices = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        for device in devices {
+            var key = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            var value: Unmanaged<CFString>?
+            var valueSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            if AudioObjectGetPropertyData(device, &key, 0, nil, &valueSize, &value) == noErr,
+               let value = value?.takeRetainedValue(), value as String == uid { return device }
+        }
+        throw NSError(domain: "Diagnostics", code: 1, userInfo: [NSLocalizedDescriptionKey: "Output device not available: \(uid)"])
     }
 
     private static func analyzeMonoAudio(url: URL) throws -> (rmsDB: Double, peakDB: Double) {

@@ -27,6 +27,19 @@ enum AppText {
 
     private static let table: [AppLanguage: [String: String]] = [
         .zh: [
+            "calendar.loading": "正在加载系统日历…",
+            "calendar.accessRequired": "需要日历完整访问权限，才能显示附近会议。",
+            "calendar.allow": "允许读取日历",
+            "calendar.denied": "未获得日历完整访问权限，请在系统设置中允许 Recorder1 访问日历。",
+            "calendar.settings": "打开日历权限设置",
+            "calendar.restricted": "系统限制了日历访问，请检查设备管理设置。",
+            "calendar.failed": "日历授权失败：",
+            "calendar.retry": "重试授权",
+            "capture.micInterrupted": "麦克风采集曾中断；缺口已补静音以保持时间对齐。",
+            "capture.micFailed": "麦克风采集失败，声音可能缺失。",
+            "capture.misaligned": "系统声轨与麦克风时长不一致，可能未对齐。",
+            "capture.analysisFailed": "音频分析未完成，完整性尚未确认。",
+            "capture.systemFailed": "系统声音采集异常，可能存在缺失或长时间静音。",
             "tab.general": "通用",
             "tab.feishu": "飞书",
             "window.settings": "设置",
@@ -101,7 +114,7 @@ enum AppText {
             "help.openPreferences": "打开设置",
             "text.uploadingFeishu": "正在上传到飞书妙记…",
             "text.meetings": "会议",
-            "text.noMeetings": "附近没有会议。",
+            "text.noMeetings": "系统日历前 2 小时至后 8 小时内没有会议（不含全天日程）。",
             "text.recent": "最近录音",
             "text.recordingFallback": "录音",
             "meter.desktop": "系统声音（左）",
@@ -140,9 +153,17 @@ enum AppText {
             "error.invalidMicFormat": "麦克风输入格式不可用。",
             "error.inputDeviceUnavailable": "选中的麦克风已不可用：%@",
             "error.setInputDeviceFailed": "无法使用选中的麦克风：%@（系统错误 %@）",
-            "capture.degraded": "录音完整性检查未通过，系统声音可能缺失或声轨未对齐。请检查本地录音后，再决定是否上传。"
+            "capture.degraded": "录音完整性检查未通过，请检查本地录音后再决定是否上传。"
         ],
         .en: [
+            "calendar.loading": "Loading system calendar…",
+            "calendar.accessRequired": "Full calendar access is required to show nearby meetings.",
+            "calendar.allow": "Allow calendar access",
+            "calendar.denied": "Full calendar access was not granted. Allow Recorder1 in System Settings.",
+            "calendar.settings": "Open calendar privacy settings",
+            "calendar.restricted": "Calendar access is restricted by the system.",
+            "calendar.failed": "Calendar authorization failed:",
+            "calendar.retry": "Retry authorization",
             "tab.general": "General",
             "tab.feishu": "Feishu",
             "window.settings": "Settings",
@@ -217,7 +238,7 @@ enum AppText {
             "help.openPreferences": "Open Preferences",
             "text.uploadingFeishu": "Uploading to Feishu Minutes...",
             "text.meetings": "Meetings",
-            "text.noMeetings": "No meetings nearby.",
+            "text.noMeetings": "No timed meetings in the system calendar from 2 hours ago to 8 hours ahead.",
             "text.recent": "Recent recordings",
             "text.recordingFallback": "Recording",
             "meter.desktop": "Desktop (L)",
@@ -256,7 +277,7 @@ enum AppText {
             "error.invalidMicFormat": "Microphone input format is unusable.",
             "error.inputDeviceUnavailable": "Selected microphone is no longer available: %@",
             "error.setInputDeviceFailed": "Could not use selected microphone: %@ (OSStatus %@)",
-            "capture.degraded": "Recording integrity could not be confirmed. System audio may be missing or tracks misaligned. Check the local recording before uploading."
+            "capture.degraded": "Recording integrity could not be confirmed. Check the local recording before uploading."
         ]
     ]
 }

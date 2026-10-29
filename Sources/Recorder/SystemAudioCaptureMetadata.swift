@@ -79,6 +79,7 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
     var lastFailureReason: String?
     var droppedFrames: Int? = nil
     var insertedSilenceFrames: Int? = nil
+    var firstHostTime: UInt64? = nil
 
     enum CodingKeys: String, CodingKey {
         case config
@@ -92,6 +93,7 @@ struct SystemAudioCaptureMetadata: Codable, Equatable {
         case lastFailureReason = "last_failure_reason"
         case droppedFrames = "dropped_frames"
         case insertedSilenceFrames = "inserted_silence_frames"
+        case firstHostTime = "first_host_time"
     }
 
     static var empty: SystemAudioCaptureMetadata {
@@ -134,5 +136,17 @@ struct CaptureIntegrity: Codable, Equatable {
             issues: issues,
             requiresUploadConfirmation: true
         )
+    }
+}
+
+struct MicrophoneCaptureMetadata: Codable, Equatable {
+    var insertedSilenceFrames: Int
+    var events: [String]
+    var firstHostTime: UInt64? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case insertedSilenceFrames = "inserted_silence_frames"
+        case events
+        case firstHostTime = "first_host_time"
     }
 }

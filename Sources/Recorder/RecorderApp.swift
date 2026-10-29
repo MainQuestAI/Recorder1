@@ -6,6 +6,9 @@ struct RecorderApp: App {
     @State private var model = RecorderModel()
 
     init() {
+        if CommandLine.arguments.contains("--diagnose-calendar") {
+            CalendarDiagnostics.runAndExit()
+        }
         if CommandLine.arguments.contains("--diagnose-upload-gate") {
             SystemAudioDiagnostics.runUploadGateAndExit()
         }

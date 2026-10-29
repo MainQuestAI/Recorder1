@@ -42,7 +42,7 @@ mkdir -p "$RESOURCES"
 cp ".build/release/Recorder" "$MACOS/Recorder"
 cp "Info.plist" "$CONTENTS/Info.plist"
 REVISION="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if ! git diff --quiet -- Sources build.sh Info.plist; then
+if ! git diff --quiet -- Sources build.sh Info.plist Recorder.entitlements; then
     REVISION="$REVISION+dirty"
 fi
 /usr/libexec/PlistBuddy -c "Add :RecorderBuildRevision string $REVISION" "$CONTENTS/Info.plist"

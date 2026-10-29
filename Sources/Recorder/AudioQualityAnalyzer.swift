@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
 struct AudioQualityReport: Codable, Equatable {
@@ -129,11 +130,11 @@ enum AudioQualityAnalyzer {
 }
 
 enum RecordingAcceptance {
-    static func rawCapture(at url: URL, failureReason: String? = nil) -> CaptureResult? {
+    static func rawCapture(at url: URL, failureReason: String? = nil, firstHostTime: UInt64? = nil) -> CaptureResult? {
         guard let file = try? AVAudioFile(forReading: url) else {
             return failureReason.map { CaptureResult(failureReason: $0) }
         }
-        return CaptureResult(sampleRate: file.processingFormat.sampleRate, frameCount: file.length, failureReason: failureReason)
+        return CaptureResult(firstHostTime: firstHostTime, sampleRate: file.processingFormat.sampleRate, frameCount: file.length, failureReason: failureReason)
     }
 
     static func evaluate(
@@ -164,7 +165,14 @@ enum RecordingAcceptance {
         if let desktop, let microphone, desktop.sampleRate > 0, microphone.sampleRate > 0 {
             let desktopDuration = Double(desktop.frameCount) / desktop.sampleRate
             let micDuration = Double(microphone.frameCount) / microphone.sampleRate
-            if abs(desktopDuration - micDuration) > max(1, quality.durationSeconds * 0.01) {
+            var endDifference = desktopDuration - micDuration
+            // StereoMixer aligns first-sample onsets. Compare the aligned endpoints,
+            // not raw lengths: an idle desktop tap can legitimately start much later.
+            if let d = desktop.firstHostTime, let m = microphone.firstHostTime {
+                let delta = Double(AudioConvertHostTimeToNanos(d >= m ? d - m : m - d)) / 1e9
+                endDifference += d >= m ? delta : -delta
+            }
+            if abs(endDifference) > max(1, quality.durationSeconds * 0.01) {
                 issues.append("System and microphone track durations differ; audio may be incomplete or misaligned.")
             }
         }

@@ -93,14 +93,11 @@ final class SystemAudioTap {
     private var captureFailureReason: String?
     private var stallRecoveryCount = 0
     private var insertedSilenceFrames = 0
-    private var lastBufferHostTime: UInt64?
-    private var lastBufferFrames = 0
-    private var lastBufferSampleRate = 0.0
     private var inputSampleRate = 0.0
     private let writerFailure = OSAllocatedUnfairLock<String?>(initialState: nil)
 
     /// The destination file. Stays open across watchdog rebuilds; finalized only on `stop()`.
-    private var file: AVAudioFile?
+    private var timelineWriter: AudioTimelineWriter?
     /// The processing format we write to disk (MONO Float32 at the output device's sample rate).
     private var writeFormat: AVAudioFormat?
     /// The format the tap actually delivers in the IOProc (used to wrap the incoming buffer list).
@@ -119,13 +116,13 @@ final class SystemAudioTap {
 
     // MARK: - Off-realtime disk writer (ring buffer + consumer thread)
 
-    /// Filled by the IOProc (producer), drained by `writerThread` (consumer).
-    private var ring: FloatRingBuffer?
+    /// Timestamped PCM packets filled by the IOProc and drained by `writerThread`.
+    private var ring: TimestampedAudioRingBuffer?
     /// Preallocated mono scratch for multi-channel downmix in the IOProc (no
     /// per-callback allocation). Sized to comfortably exceed any IO buffer.
     private var scratch: UnsafeMutablePointer<Float>?
     private let scratchCapacity = 16_384
-    /// Background thread that drains `ring` to `file`.
+    /// Background thread that drains timestamped packets to the timeline writer.
     private var writerThread: Thread?
     /// Set true by `stop()` to tell the writer to drain and exit.
     private let writerShouldStop = OSAllocatedUnfairLock<Bool>(initialState: false)
@@ -135,7 +132,9 @@ final class SystemAudioTap {
     // MARK: - Realtime-path flags (separately lock-protected so the IOProc never blocks on `lock`)
 
     private let paused = OSAllocatedUnfairLock<Bool>(initialState: false)
-    private let resetTimeline = OSAllocatedUnfairLock<Bool>(initialState: false)
+    private let pauseTimeline = OSAllocatedUnfairLock<(since: UInt64?, total: Double)>(initialState: (nil, 0))
+    private var endHostTime: UInt64 = 0
+    private var finalPausedSeconds = 0.0
 
     /// Host time of the most recent IOProc callback (proves the proc is still firing).
     private let lastCallbackHostTime = OSAllocatedUnfairLock<UInt64>(initialState: 0)
@@ -195,8 +194,6 @@ final class SystemAudioTap {
         captureFailureReason = nil
         stallRecoveryCount = 0
         insertedSilenceFrames = 0
-        lastBufferHostTime = nil
-        lastBufferFrames = 0
         writerFailure.withLock { $0 = nil }
         paused.withLock { $0 = false }
         capturedSampleRateSource = nil
@@ -219,22 +216,8 @@ final class SystemAudioTap {
         }
 
         do {
-            // AVAudioFile flushes per write -> at most one buffer lost on crash.
-            let f = try AVAudioFile(
-                forWriting: url,
-                settings: [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: writeFmt.sampleRate,
-                    AVNumberOfChannelsKey: 1,
-                    AVLinearPCMBitDepthKey: 32,
-                    AVLinearPCMIsFloatKey: true,
-                    AVLinearPCMIsNonInterleaved: false,
-                    AVLinearPCMIsBigEndianKey: false
-                ],
-                commonFormat: .pcmFormatFloat32,
-                interleaved: false
-            )
-            self.file = f
+            timelineWriter = try AudioTimelineWriter(url: url, sampleRate: writeFmt.sampleRate)
+            timelineWriter?.reportGapsAsFailure = false
         } catch {
             destroyTapAndAggregateLocked()
             throw TapError.fileOpenFailed(error.localizedDescription)
@@ -247,14 +230,16 @@ final class SystemAudioTap {
         self.inputSampleRate = built.captureSampleRate
 
         // 3) Spin up the off-realtime writer (ring + drain thread) BEFORE the
-        //    IOProc starts producing. ~4 s of mono float headroom; the IOProc
+        //    IOProc starts producing. preallocated packet headroom; the IOProc
         //    only ever copies into this ring, never touches the disk.
-        let ringFrames = max(Int(writeFmt.sampleRate * 4), 48_000)
-        let newRing = FloatRingBuffer(capacityFrames: ringFrames)
+        let newRing = TimestampedAudioRingBuffer()
+        pauseTimeline.withLock { $0 = (nil, 0) }
+        endHostTime = 0
+        finalPausedSeconds = 0
         self.ring = newRing
         self.scratch = UnsafeMutablePointer<Float>.allocate(capacity: scratchCapacity)
         writerShouldStop.withLock { $0 = false }
-        startWriterThread(file: self.file!, writeFormat: writeFmt, ring: newRing, inputRate: inputSampleRate)
+        startWriterThread(writer: timelineWriter!, ring: newRing)
 
         // 4) Install IOProc + start the aggregate device.
         do {
@@ -264,7 +249,7 @@ final class SystemAudioTap {
             self.ring = nil
             self.scratch?.deallocate()
             self.scratch = nil
-            file = nil   // finalize/close the just-opened file
+            timelineWriter = nil
             destroyTapAndAggregateLocked()
             throw error
         }
@@ -280,13 +265,24 @@ final class SystemAudioTap {
 
     /// Gate writes. Device keeps running, meters keep updating. Thread-safe.
     func setPaused(_ isPaused: Bool) {
-        if !isPaused { resetTimeline.withLock { $0 = true } }
+        let now = mach_absolute_time()
+        pauseTimeline.withLock { value in
+            if isPaused, value.since == nil { value.since = now }
+            else if !isPaused, let since = value.since {
+                value.total += Double(Self.hostTimeToNanos(now - since)) / 1e9
+                value.since = nil
+            }
+        }
         paused.withLock { $0 = isPaused }
     }
 
     /// Stop the IOProc, destroy the aggregate + tap, finalize the file.
     func stop() -> CaptureResult {
         stopWatchdog()
+        let now = mach_absolute_time()
+        let pause = pauseTimeline.withLock { $0 }
+        endHostTime = pause.since ?? now
+        finalPausedSeconds = pause.total
 
         lock.lock()
         defer { lock.unlock() }
@@ -306,8 +302,7 @@ final class SystemAudioTap {
         // IOProc callback returns, so the producer is fully stopped after this.
         destroyTapAndAggregateLocked()
 
-        // Drain whatever the IOProc already enqueued, then join the writer so
-        // it releases its reference to `file` before we finalize it.
+        // Drain queued packets and trailing silence before finalizing the writer.
         stopWriterThreadAndDrain()
 
         if let dropped = ring?.totalDropped, dropped > 0 {
@@ -320,12 +315,13 @@ final class SystemAudioTap {
         scratch?.deallocate()
         scratch = nil
 
-        // Finalize the file (setting nil flushes + closes — last reference now).
-        file = nil
+        // Release the finalized writer after its thread has joined.
+        timelineWriter = nil
         writeFormat = nil
         tapFormat = nil
 
         var metadata = captureMetadataLocked()
+        metadata.firstHostTime = firstHostTime
         metadata.droppedFrames = droppedFrames
         metadata.insertedSilenceFrames = insertedSilenceFrames
         return CaptureResult(
@@ -563,13 +559,6 @@ final class SystemAudioTap {
             onLevelDB?(db)
         }
 
-        let reset = resetTimeline.withLock { value in let reset = value; value = false; return reset }
-        let previousHostTime = reset ? nil : lastBufferHostTime
-        let previousDuration = lastBufferSampleRate > 0 ? Double(lastBufferFrames) / lastBufferSampleRate : 0
-        lastBufferHostTime = now
-        lastBufferFrames = frameCount
-        lastBufferSampleRate = sampleRate
-
         // --- Honor pause gate (meters keep updating above; only the write is gated). ---
         if paused.withLock({ $0 }) {
             return
@@ -585,34 +574,22 @@ final class SystemAudioTap {
         // AudioDeviceStop.
         guard let ring = self.ring else { return }
 
-        // Record the first sample's host time for cross-stream alignment.
-        if firstHostTime == nil {
-            firstHostTime = inputTime.pointee.mHostTime
-        }
-
-        // Preserve elapsed time through route changes / callback stalls. Padding happens on the
-        // same producer as audio; no second ring writer, allocation, or disk I/O is introduced.
-        if let previousHostTime, now > previousHostTime, let scratch {
-            let elapsed = Double(Self.hostTimeToNanos(now - previousHostTime)) / 1_000_000_000
-            let gap = elapsed - previousDuration
-            if gap > 0.02 {
-                var remaining = Int(min(gap, 3) * sampleRate)
-                scratch.update(repeating: 0, count: scratchCapacity)
-                while remaining > 0 {
-                    let count = min(remaining, scratchCapacity)
-                    ring.write(scratch, count: count)
-                    insertedSilenceFrames += count
-                    remaining -= count
-                }
-                if gap > 3 {
-                    writerFailure.withLock { $0 = "System audio callback gap exceeded three seconds." }
-                }
+        let hostTime = inputTime.pointee.mFlags.contains(.hostTimeValid) ? inputTime.pointee.mHostTime : now
+        if firstHostTime == nil { firstHostTime = hostTime }
+        let pauseSeconds = pauseTimeline.withLock { $0.total }
+        func enqueue(_ data: UnsafePointer<Float>, offset: Int, count: Int) {
+            var position = 0
+            while position < count {
+                let frames = min(count - position, ring.packetFrames)
+                let timestamp = hostTime + AudioConvertNanosToHostTime(UInt64(Double(offset + position) / sampleRate * 1e9))
+                ring.write(data + position, packet: .init(frames: frames, hostTime: timestamp, sampleRate: sampleRate, pausedSeconds: pauseSeconds))
+                position += frames
             }
         }
 
         if channelCount <= 1 {
             // Already mono: enqueue straight from the input buffer.
-            ring.write(firstData, count: frameCount)
+            enqueue(firstData, offset: 0, count: frameCount)
         } else if let scratch = self.scratch {
             // Average all channels into mono, in scratch-sized chunks (IO buffers are tiny, so
             // this loop runs once in practice). Taps often report interleaved stereo
@@ -641,7 +618,7 @@ final class SystemAudioTap {
                     var scale = 1.0 / Float(channelCount)
                     vDSP_vsmul(scratch, 1, &scale, scratch, 1, cn)
                 }
-                ring.write(scratch, count: chunk)
+                enqueue(scratch, offset: offset, count: chunk)
                 offset += chunk
             }
         }
@@ -649,62 +626,35 @@ final class SystemAudioTap {
 
     // MARK: - Writer thread (drains the ring to disk, off the realtime path)
 
-    /// Start the background consumer that drains `ring` into `file`. The thread holds its own
-    /// strong references to `file`/`ring` for its lifetime and exits when `writerShouldStop` is set
-    /// AND the ring has been fully drained.
-    private func startWriterThread(file: AVAudioFile, writeFormat: AVAudioFormat, ring: FloatRingBuffer, inputRate: Double) {
-        let chunkFrames = 4096
-        let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputRate, channels: 1, interleaved: false)!
+    /// One writer survives route rebuilds. Each packet retains its original source
+    /// rate and host clock; quiet intervals and trailing silence retain elapsed time.
+    private func startWriterThread(writer: AudioTimelineWriter, ring: TimestampedAudioRingBuffer) {
         let thread = Thread { [weak self] in
-            guard let buffer = AVAudioPCMBuffer(
-                pcmFormat: inputFormat,
-                frameCapacity: AVAudioFrameCount(chunkFrames)
-            ), let dst = buffer.floatChannelData?[0] else {
-                self?.writerFailure.withLock { $0 = "Could not allocate system audio writer buffer." }
-                return
-            }
-            let converter = abs(inputRate - writeFormat.sampleRate) > 1
-                ? AVAudioConverter(from: inputFormat, to: writeFormat) : nil
-            let converted = AVAudioPCMBuffer(pcmFormat: writeFormat, frameCapacity: AVAudioFrameCount(ceil(Double(chunkFrames) * writeFormat.sampleRate / inputRate) + 128))!
-            if abs(inputRate - writeFormat.sampleRate) > 1 && converter == nil {
-                self?.writerFailure.withLock { $0 = "Could not resample system audio after route change." }
-                return
-            }
-
-            while true {
-                let stopRequested = self?.writerShouldStop.withLock { $0 } ?? true
-                let n = ring.read(into: dst, maxCount: chunkFrames)
-                if n > 0 {
-                    buffer.frameLength = AVAudioFrameCount(n)
-                    do {
-                        if let converter {
-                            var supplied = false
-                            var conversionError: NSError?
-                            let status = converter.convert(to: converted, error: &conversionError) { _, flag in
-                                if supplied { flag.pointee = .noDataNow; return nil }
-                                supplied = true
-                                flag.pointee = .haveData
-                                return buffer
-                            }
-                            if status == .error { throw conversionError ?? CocoaError(.fileWriteUnknown) as NSError }
-                            if converted.frameLength > 0 {
-                                try file.write(from: converted)
-                                self?.capturedFrames += AVAudioFramePosition(converted.frameLength)
-                            }
-                        } else {
-                            try file.write(from: buffer)
-                            self?.capturedFrames += AVAudioFramePosition(n)
-                        }
-                    } catch {
-                        self?.writerFailure.withLock { $0 = error.localizedDescription }
-                        self?.onFatalError?(error)
+            guard let self else { return }
+            defer { writer.close() }
+            do {
+                let scratch = UnsafeMutablePointer<Float>.allocate(capacity: ring.packetFrames)
+                defer { scratch.deallocate() }
+                while true {
+                    let stopRequested = self.writerShouldStop.withLock { $0 }
+                    if let packet = ring.read(into: scratch) {
+                        let format = AVAudioFormat(standardFormatWithSampleRate: packet.sampleRate, channels: 1)!
+                        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(packet.frames))!
+                        buffer.frameLength = buffer.frameCapacity
+                        buffer.floatChannelData![0].update(from: scratch, count: packet.frames)
+                        try writer.append(buffer, hostTime: packet.hostTime, pausedSeconds: packet.pausedSeconds)
+                        self.capturedFrames = writer.frameCount
+                    } else if stopRequested {
+                        try writer.finish(at: self.endHostTime, pausedSeconds: self.finalPausedSeconds)
+                        self.capturedFrames = writer.frameCount
+                        self.insertedSilenceFrames = writer.insertedSilenceFrames
+                        writer.close()
                         break
-                    }
-                } else if stopRequested {
-                    break               // empty AND asked to stop -> fully drained
-                } else {
-                    usleep(5_000)        // 5 ms; the ring holds several seconds of headroom
+                    } else { usleep(5_000) }
                 }
+            } catch {
+                self.writerFailure.withLock { $0 = error.localizedDescription }
+                self.onFatalError?(error)
             }
         }
         thread.name = "com.dingcheng.Recorder1.desktopWriter"
@@ -790,7 +740,7 @@ final class SystemAudioTap {
         }
         rebuilding = true
 
-        // Destroy existing Core Audio objects (leaves `file` untouched).
+        // Destroy existing Core Audio objects (leaves the writer untouched).
         destroyTapAndAggregateLocked()
 
         // Fresh tap UUID for the rebuild.
@@ -812,12 +762,9 @@ final class SystemAudioTap {
                 self.capturedSampleRate = built.captureSampleRate
                 self.capturedSampleRateSource = built.captureSampleRateSource
             }
-            if abs(inputSampleRate - built.captureSampleRate) > 1, let file, let writeFormat, let ring {
-                stopWriterThreadAndDrain()
-                writerShouldStop.withLock { $0 = false }
-                inputSampleRate = built.captureSampleRate
-                startWriterThread(file: file, writeFormat: writeFormat, ring: ring, inputRate: inputSampleRate)
-            }
+            // Each queued packet carries its own source rate and host time. A route
+            // rebuild never restarts the disk writer or reinterprets queued samples.
+            inputSampleRate = built.captureSampleRate
             try installIOProcAndStartLocked()
             installOutputRateListenerLocked()
         } catch {
