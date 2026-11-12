@@ -72,8 +72,8 @@ final class RecorderModel {
     var inputDevices: [AudioInputDeviceInfo] = []
 
     // Feishu upload (post-save).
-    var uploadState: UploadState = .idle
-    var lastMinuteURL: URL? = nil
+    private(set) var uploads = UploadPresentation()
+    var uploadState: UploadState { uploads.result }
 
     /// The most recent recordings on disk (loaded at launch + after changes).
     var recentRecordings: [RecordingEntry] = []
@@ -92,9 +92,6 @@ final class RecorderModel {
     /// The meeting (if any) the current recording is attached to.
     @ObservationIgnored private var activeMeeting: Meeting?
 
-    /// Everything needed to retry a Feishu upload, captured at save time.
-    @ObservationIgnored private var lastUploadJob: FeishuUploadJob?
-    @ObservationIgnored private var activeUploadFolders: Set<URL> = []
     @ObservationIgnored private var lastDesktopActivity = Date()
     @ObservationIgnored private var systemSilenceWarningShown = false
     @ObservationIgnored private var preparingToRecord = false
@@ -270,11 +267,6 @@ final class RecorderModel {
         activeMeeting = titleContext.linkedMeeting
         UploadStatusStore.writeInitial(session: session, meeting: titleContext.linkedMeeting)
 
-        // Clear any previous recording's upload UI.
-        uploadState = .idle
-        lastMinuteURL = nil
-        lastUploadJob = nil
-
         // Silence monitor (auto-stop after prolonged silence on both channels).
         // Only armed when the user has auto-stop enabled.
         if silenceAutoStopEnabled {
@@ -437,17 +429,13 @@ final class RecorderModel {
                         microphone: micResult
                     )
                     UploadStatusStore.markCaptureIntegrity(folderURL: folderURL, integrity: integrity)
-                    self.lastUploadJob = job
                     if integrity.requiresUploadConfirmation {
-                        self.uploadState = .needsConfirmation(
-                            self.captureIntegrityMessage(integrity)
-                        )
+                        self.uploads.requireConfirmation(self.captureIntegrityMessage(integrity), for: job)
                         self.statusMessage = self.text("status.savedSystemMissing", outputURL.lastPathComponent)
                     } else if self.autoUploadAfterSave {
                         self.statusMessage = self.text("status.saved", outputURL.lastPathComponent)
                         self.startUpload(job, knownIntegrity: integrity)
                     } else {
-                        self.uploadState = .idle
                         self.statusMessage = self.text("status.savedAutoOff", outputURL.lastPathComponent)
                     }
                     self.refreshRecordings()
@@ -484,9 +472,6 @@ final class RecorderModel {
         activeMeeting = nil
         silenceMonitor = nil
         statusMessage = text("status.discarded")
-        uploadState = .idle
-        lastMinuteURL = nil
-        lastUploadJob = nil
         refreshRecordings()
     }
 
@@ -682,19 +667,13 @@ final class RecorderModel {
 
     // MARK: - Feishu upload
 
-    func retryUpload() {
-        guard let job = lastUploadJob else {
-            statusMessage = text("status.noAudioToUpload")
-            return
-        }
+    func retryUpload(for job: FeishuUploadJob) {
+        guard case .failed = uploads.result, uploads.selectedJob == job else { return }
         startUpload(job)
     }
 
-    func confirmUploadDespiteDegradedAudio() {
-        guard let job = lastUploadJob else {
-            statusMessage = text("status.noAudioToUpload")
-            return
-        }
+    func confirmUploadDespiteDegradedAudio(for job: FeishuUploadJob) {
+        guard uploads.canConfirm(job) else { return }
         UploadStatusStore.appendLog(folderURL: job.folderURL, "User confirmed upload despite degraded recording acceptance.")
         startUpload(job, confirmedDegraded: true)
     }
@@ -719,11 +698,7 @@ final class RecorderModel {
     }
 
     private func startUpload(_ job: FeishuUploadJob, knownIntegrity: CaptureIntegrity? = nil, confirmedDegraded: Bool = false) {
-        guard activeUploadFolders.insert(job.folderURL).inserted else { return }
-        lastUploadJob = job
-        uploadState = .running
-        lastMinuteURL = nil
-        statusMessage = text("status.uploadingFeishu")
+        guard uploads.begin(job) else { return }
 
         let cliPath = larkCLIPath
         let fetchNotes = fetchNotesAfterUpload
@@ -731,7 +706,6 @@ final class RecorderModel {
         let shouldOpen = openMinuteURLAfterUpload
 
         Task { [weak self] in
-            defer { self?.activeUploadFolders.remove(job.folderURL) }
             do {
                 // Library uploads and retries must pass the same gate as a freshly saved recording.
                 // Existing Minutes only need artifact retrieval, so no new audio leaves the device.
@@ -757,65 +731,41 @@ final class RecorderModel {
                         UploadStatusStore.markCaptureIntegrity(folderURL: job.folderURL, integrity: integrity)
                     }
                     if integrity.requiresUploadConfirmation {
-                        self?.uploadState = .needsConfirmation(self?.captureIntegrityMessage(integrity) ?? integrity.issues.joined(separator: " "))
-                        self?.statusMessage = self?.text("status.savedSystemMissing", job.audioURL.lastPathComponent) ?? ""
-                        self?.refreshRecordings()
+                        guard let self else { return }
+                        self.uploads.finish(job, with: .needsConfirmation(self.captureIntegrityMessage(integrity)))
+                        self.refreshRecordings()
                         return
                     }
                 }
                 let uploader = FeishuCLIUploader(cliPath: cliPath, fetchNotes: fetchNotes)
-                let result = try await uploader.upload(job: job)
-                await MainActor.run {
-                    guard let self else { return }
-                    self.lastMinuteURL = result.minuteURL
-                    self.uploadState = .uploaded(result.minuteURL)
-                    self.statusMessage = self.text("status.uploadedFeishu")
-                    if shouldCopy {
-                        self.copyMinuteURL(result.minuteURL)
-                    }
-                    if shouldOpen {
-                        NSWorkspace.shared.open(result.minuteURL)
-                    }
-                    self.runLocalCleanup(showStatus: false)
-                    self.refreshRecordings()
+                let result = try await uploader.upload(job: job) { [weak self] phase in
+                    self?.uploads.update(phase, for: job)
                 }
+                guard let self else { return }
+                if self.uploads.finish(job, with: .uploaded(result.minuteURL, notesPending: result.notesFetchError != nil)) {
+                    if shouldCopy { self.copyMinuteURL(result.minuteURL, showStatus: false) }
+                    if shouldOpen { NSWorkspace.shared.open(result.minuteURL) }
+                }
+                self.runLocalCleanup(showStatus: false)
+                self.refreshRecordings()
             } catch {
                 let message = RecorderModel.describeUploadError(error)
                 UploadStatusStore.markFailed(job: job, error: error)
-                await MainActor.run {
-                    guard let self else { return }
-                    self.uploadState = .failed(message)
-                    self.statusMessage = self.text("status.uploadFailed")
-                    self.refreshRecordings()
-                }
+                self?.uploads.finish(job, with: .failed(message))
+                self?.refreshRecordings()
             }
         }
     }
 
-    func copyCurrentMinuteURL() {
-        guard let url = lastMinuteURL else { return }
-        copyMinuteURL(url)
-    }
-
-    func openCurrentMinuteURL() {
-        guard let url = lastMinuteURL else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    func copyMinuteURL(_ url: URL) {
+    func copyMinuteURL(_ url: URL, showStatus: Bool = true) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(url.absoluteString, forType: .string)
-        statusMessage = text("status.minuteCopied")
+        if showStatus { statusMessage = text("status.minuteCopied") }
     }
 
     func openMinuteURL(_ url: URL) {
         NSWorkspace.shared.open(url)
-    }
-
-    func revealLastUploadFolder() {
-        guard let folderURL = lastUploadJob?.folderURL else { return }
-        reveal(folderURL)
     }
 
     // MARK: - Recordings library

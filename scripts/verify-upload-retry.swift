@@ -32,6 +32,7 @@ struct UploadRetryProbe {
         }
     }
 
+    @MainActor
     private static func run() async throws {
         let args = CommandLine.arguments
         try require(args.count == 3, "usage: verify-upload-retry <work-folder> <fake-lark-cli>")
@@ -107,7 +108,10 @@ struct UploadRetryProbe {
         let failedLog = try String(contentsOf: logURL, encoding: .utf8)
         try require(failedLog.contains("Upload failed"), "upload.log did not record the failure")
 
-        let result = try await uploader.upload(job: job)
+        var phases: [UploadPhase] = []
+        let result = try await uploader.upload(job: job) { phases.append($0) }
+        try require(phases == [.uploadingAudio, .creatingMinute, .fetchingNotes, .savingResult],
+                    "a fresh upload did not report the steps it ran")
         try require(result.fileToken == "fake-file-token", "retry did not return fake file token")
         try require(result.minuteToken == "fake-minute-token", "retry did not return fake minute token")
         let audioAfterRetry = try Data(contentsOf: audioURL)
@@ -144,7 +148,7 @@ struct UploadRetryProbe {
         try require(driveCalls.count == 2, "expected two drive uploads using \(job.uploadFileName), saw \(driveCalls.count)")
 
         for scenario in ["fail-drive-network-once", "always-drive-network", "fail-minute-service-once",
-                         "fail-minute-auth-once", "fail-minute-network-once", "fail-notes-once", "not-ready-once",
+                         "fail-minute-auth-once", "fail-minute-network-once", "fail-notes-once", "not-ready-once", "skip-notes",
                          "crash-drive-after-create", "crash-minute-after-create"] {
             let destination = folderURL.appendingPathComponent(scenario)
             try fm.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -157,8 +161,11 @@ struct UploadRetryProbe {
             var fast = uploader
             fast.retryDelayNanoseconds = 0
             fast.notesDelayNanoseconds = 0
+            fast.fetchNotes = scenario != "skip-notes"
+            var scenarioPhases: [UploadPhase] = []
+            var scenarioResult: FeishuUploadResult?
             var failed = false
-            do { _ = try await fast.upload(job: scenarioJob) }
+            do { scenarioResult = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) } }
             catch { failed = true; UploadStatusStore.markFailed(job: scenarioJob, error: error) }
             let shouldFail = ["always-drive-network", "fail-minute-auth-once", "fail-minute-network-once",
                               "crash-drive-after-create", "crash-minute-after-create"].contains(scenario)
@@ -182,9 +189,12 @@ struct UploadRetryProbe {
                 try require(try calls("minutes +upload") == 1 && calls("drive +upload") == 1,
                             "inaccessible checkpoint caused a new cloud object")
                 try fm.removeItem(at: destination.appendingPathComponent("missing-file"))
-                _ = try await fast.upload(job: scenarioJob)
+                scenarioPhases.removeAll()
+                _ = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) }
                 try require(try calls("drive +upload") == 1, "resume duplicated an existing file")
                 try require(try calls("drive metas") == 2, "resume did not validate the file")
+                try require(scenarioPhases == [.checkingExisting, .creatingMinute, .fetchingNotes, .savingResult],
+                            "resuming a saved Drive file reported uploading audio")
             }
             if scenario == "fail-minute-network-once" {
                 do { _ = try await fast.upload(job: scenarioJob); throw ProbeError.failed("ambiguous creation was replayed") }
@@ -205,10 +215,55 @@ struct UploadRetryProbe {
                 try require(try calls(command) == 1, "retry duplicated a remotely created artifact after a CLI crash")
             }
             if scenario == "fail-notes-once" {
+                try require(scenarioResult?.notesFetchError != nil && scenarioResult?.minuteURL == result.minuteURL,
+                            "unavailable notes must still return a usable minute")
                 try require(UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == "notes_pending", "notes failure checkpoint missing")
-                _ = try await fast.upload(job: scenarioJob)
+                func reloadedEntry() -> RecordingEntry? {
+                    RecordingsLibrary.recent(limit: 100, rootURL: folderURL)
+                        .first { $0.folderURL.lastPathComponent == destination.lastPathComponent }
+                }
+                let pending = reloadedEntry()
+                try require(pending?.notesPending == true && pending?.minuteURL == result.minuteURL,
+                            "the recordings library lost the pending notes status or link on reload")
+                try Data().write(to: destination.appendingPathComponent("fail-validate-once"))
+                scenarioPhases.removeAll()
+                do {
+                    _ = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) }
+                    throw ProbeError.failed("the fake existing-Minute validation did not fail")
+                } catch let error as ProbeError {
+                    throw error
+                } catch {
+                    UploadStatusStore.markFailed(job: scenarioJob, error: error)
+                }
+                try require(scenarioPhases == [.checkingExisting], "failed validation proceeded to fetch notes")
+                let afterFailedValidation = reloadedEntry()
+                try require(afterFailedValidation?.notesPending == true && afterFailedValidation?.minuteURL == result.minuteURL,
+                            "failed retry hid the pending notes status or link on reload")
+
+                var skipNotes = fast
+                skipNotes.fetchNotes = false
+                scenarioPhases.removeAll()
+                let skipped = try await skipNotes.upload(job: scenarioJob) { scenarioPhases.append($0) }
+                try require(scenarioPhases == [.checkingExisting, .savingResult], "disabled retry reported fetching notes")
+                try require(skipped.notesFetchError != nil && reloadedEntry()?.notesPending == true,
+                            "retry without fetching notes cleared the previous pending status")
+
+                scenarioPhases.removeAll()
+                let retry = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) }
                 try require(try calls("drive +upload") == 1 && calls("minutes +upload") == 1, "notes retry duplicated creation")
-                try require(try calls("minutes minutes") == 1, "existing minute was not validated")
+                try require(try calls("minutes minutes") == 3, "existing minute was not validated on each retry")
+                try require(scenarioPhases == [.checkingExisting, .fetchingNotes, .savingResult],
+                            "notes retry reported a new upload or minute creation")
+                try require(retry.notesFetchError == nil && UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == "complete",
+                            "successful notes retry did not clear the pending result")
+                try require(reloadedEntry()?.notesPending == false, "the recordings library still shows notes pending after retry")
+            }
+            if scenario == "skip-notes" {
+                try require(try calls("vc +notes") == 0, "disabled notes fetch ran the CLI")
+                try require(scenarioPhases == [.uploadingAudio, .creatingMinute, .savingResult],
+                            "disabled notes fetch was shown as an active phase")
+                try require(scenarioResult?.notesFetchError == nil && UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == "complete",
+                            "disabled notes fetch was treated as a failure")
             }
             if !shouldFail {
                 try Data("modified audio".utf8).write(to: audio)
@@ -251,5 +306,52 @@ struct UploadRetryProbe {
         let pid = Int32(try String(contentsOf: folderURL.appendingPathComponent("sleep.pid"), encoding: .utf8))!
         try require(kill(pid, 0) == -1 && errno == ESRCH, "timed-out CLI is still running")
         print("PASS timed-out native CLI is terminated")
+        try verifyOverlappingPresentation(first: job, minuteURL: result.minuteURL)
+    }
+
+    private static func verifyOverlappingPresentation(first: FeishuUploadJob, minuteURL: URL) throws {
+        let secondFolder = first.folderURL.appendingPathComponent("other")
+        let second = FeishuUploadJob(audioURL: secondFolder.appendingPathComponent("audio.m4a"), folderURL: secondFolder,
+                                    meetingTitle: "Second recording", attendees: [], startedAt: first.startedAt, endedAt: first.endedAt)
+        let secondURL = minuteURL.appendingPathComponent("second")
+        var presentation = UploadPresentation()
+        try require(presentation.begin(first), "first upload did not start")
+        presentation.update(.fetchingNotes, for: first)
+        try require(!presentation.begin(first), "same recording was admitted twice")
+        try require(presentation.begin(second), "another recording could not upload concurrently")
+        presentation.update(.uploadingAudio, for: second)
+        presentation.update(.savingResult, for: first)
+        try require(presentation.current?.job == second && presentation.current?.phase == .uploadingAudio,
+                    "an older callback took over the current progress")
+        try require(presentation.finish(second, with: .uploaded(secondURL, notesPending: true)),
+                    "newest upload did not own its result actions")
+        try require(presentation.current?.job == first && presentation.current?.phase == .savingResult,
+                    "ongoing upload did not return after the newest upload completed")
+        try require(presentation.isActive(first.folderURL) && !presentation.isActive(second.folderURL),
+                    "another recording's upload disabled the completed recording's retry")
+        let thirdFolder = first.folderURL.appendingPathComponent("unrelated")
+        try require(!presentation.isActive(thirdFolder), "another recording's upload disabled an unrelated recording")
+        try require(presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "an older successful upload was not allowed to run its automatic link actions")
+        try require(presentation.current == nil && presentation.selectedJob == second
+                    && presentation.result == .uploaded(secondURL, notesPending: true),
+                    "a late callback changed the partial result or its recording")
+        try require(!presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "a duplicate completion was allowed to repeat link actions")
+
+        try require(presentation.begin(first), "a finished upload could not restart")
+        presentation.requireConfirmation("Check audio", for: second)
+        try require(presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "a newer confirmation prevented the earlier success from running its link actions")
+        try require(presentation.selectedJob == second && presentation.result == .needsConfirmation("Check audio"),
+                    "older success replaced a newer confirmation")
+        try require(presentation.current == nil && presentation.canConfirm(second),
+                    "the correct confirmation was unavailable without an active upload")
+        presentation.requireConfirmation("Check another recording", for: first)
+        try require(!presentation.canConfirm(second) && presentation.canConfirm(first),
+                    "a stale confirmation button could approve a different recording")
+        try require(presentation.begin(first) && !presentation.canConfirm(first),
+                    "a confirmation remained valid after its recording began uploading")
+        print("PASS concurrent upload controls, automatic link actions, and recording-specific confirmation")
     }
 }

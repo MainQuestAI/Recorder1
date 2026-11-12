@@ -163,6 +163,7 @@ case "drive metas":
         print("{\"ok\":true,\"data\":{\"metas\":[{\"doc_token\":\"fake-file-token\"}]}}")
     }
 case "minutes minutes":
+    try failIfMarked("fail-validate-once", type: "authorization", message: "missing scope", exitCode: 3)
     print("{\"ok\":true,\"data\":{\"minute\":{\"token\":\"fake-minute-token\"}}}")
 case "probe sleep":
     try String(ProcessInfo.processInfo.processIdentifier).write(to: cwd.appendingPathComponent("sleep.pid"), atomically: true, encoding: .utf8)

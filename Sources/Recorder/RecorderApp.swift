@@ -41,10 +41,10 @@ struct RecorderApp: App {
     private var menuBarSymbol: String {
         switch model.state {
         case .idle:
+            if model.uploads.current != nil { return "arrow.up.circle.fill" }
             switch model.uploadState {
             case .idle: return "mic.fill"
             case .needsConfirmation: return "exclamationmark.triangle.fill"
-            case .running: return "arrow.up.circle.fill"
             case .uploaded: return "checkmark.circle.fill"
             case .failed: return "exclamationmark.triangle.fill"
             }

@@ -17,9 +17,11 @@ struct RecordingEntry: Identifiable, Equatable {
     let minuteURL: URL?
     /// Parsed upload status from metadata.json.
     let uploadStatus: String?
+    let uploadStage: String?
 
     var hasTranscript: Bool { transcriptURL != nil }
     var isUploaded: Bool { minuteURL != nil || uploadStatus == "uploaded" }
+    var notesPending: Bool { uploadStage == "notes_pending" }
     var displayTitle: String {
         if let title, !title.isEmpty { return title }
         return "Recording"
@@ -37,9 +39,9 @@ enum RecordingsLibrary {
     }
 
     /// The `limit` most recent recording folders, newest first.
-    static func recent(limit: Int) -> [RecordingEntry] {
+    static func recent(limit: Int, rootURL: URL? = recordingsRoot()) -> [RecordingEntry] {
         let fm = FileManager.default
-        guard let root = recordingsRoot(),
+        guard let root = rootURL,
               let items = try? fm.contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey, .contentModificationDateKey],
@@ -75,7 +77,8 @@ enum RecordingsLibrary {
                 audioURL: hasAudio ? audio : nil,
                 transcriptURL: hasTranscript ? transcript : nil,
                 minuteURL: minuteURL,
-                uploadStatus: metadata?.uploadStatus
+                uploadStatus: metadata?.uploadStatus,
+                uploadStage: metadata?.uploadStage
             )
         }
 

@@ -31,14 +31,13 @@ enum RecorderState: Equatable {
 
 // MARK: - UploadState
 
-/// Post-save Feishu upload progress, surfaced in the panel.
+/// Result and available actions for the selected Feishu upload.
 enum UploadState: Equatable {
     case idle
     /// Saved audio is likely incomplete; user must confirm before upload.
     case needsConfirmation(String)
-    case running
-    /// Feishu Minutes URL.
-    case uploaded(URL)
+    /// Feishu Minutes exists even if its notes could not be fetched.
+    case uploaded(URL, notesPending: Bool)
     /// Failed with a user-facing message.
     case failed(String)
 }

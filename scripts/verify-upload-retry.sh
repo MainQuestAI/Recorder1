@@ -24,6 +24,7 @@ swiftc \
   Sources/Recorder/CLIProcessRunner.swift \
   Sources/Recorder/FeishuMinutesParser.swift \
   Sources/Recorder/FeishuUploadJob.swift \
+  Sources/Recorder/UploadPresentation.swift \
   Sources/Recorder/FeishuCLIUploader.swift \
   Sources/Recorder/UploadStatusStore.swift \
   scripts/verify-upload-retry.swift
