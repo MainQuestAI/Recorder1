@@ -23,8 +23,12 @@ struct UploadPresentation {
 
     var current: Progress? { active.last }
 
+    func isActive(_ folderURL: URL) -> Bool {
+        active.contains { $0.job.folderURL == folderURL }
+    }
+
     mutating func begin(_ job: FeishuUploadJob) -> Bool {
-        guard !active.contains(where: { $0.job.folderURL == job.folderURL }) else { return false }
+        guard !isActive(job.folderURL) else { return false }
         active.append(Progress(job: job))
         selectedJob = job
         result = .idle
@@ -41,13 +45,19 @@ struct UploadPresentation {
         result = .needsConfirmation(message)
     }
 
-    /// Returns whether this result owns the panel and its automatic link actions.
+    func canConfirm(_ job: FeishuUploadJob) -> Bool {
+        guard case .needsConfirmation = result else { return false }
+        return selectedJob == job
+    }
+
+    /// Returns whether an active upload was completed, independently of panel selection.
     @discardableResult
     mutating func finish(_ job: FeishuUploadJob, with state: UploadState) -> Bool {
         guard let index = active.firstIndex(where: { $0.job.folderURL == job.folderURL }) else { return false }
         active.remove(at: index)
-        guard selectedJob?.folderURL == job.folderURL else { return false }
-        result = state
+        if selectedJob?.folderURL == job.folderURL {
+            result = state
+        }
         return true
     }
 }

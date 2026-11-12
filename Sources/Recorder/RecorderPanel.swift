@@ -152,7 +152,9 @@ struct RecorderPanel: View {
                 uploadProgress(upload)
             }
 
-            uploadResult
+            if let job = model.uploads.selectedJob {
+                uploadResult(for: job, state: model.uploadState)
+            }
 
             meters
 
@@ -410,16 +412,20 @@ struct RecorderPanel: View {
             .lineLimit(1)
     }
 
-    @ViewBuilder
-    private var otherUploadTitle: some View {
-        if model.uploads.current != nil, let job = model.uploads.selectedJob {
+    private func uploadResultRecording(_ job: FeishuUploadJob) -> some View {
+        HStack(spacing: 6) {
             uploadTitle(job)
+                .help(job.meetingTitle ?? model.text("text.recordingFallback"))
+            Text(job.startedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption)
+                .foregroundStyle(MQTheme.textSecondary)
+                .fixedSize()
         }
     }
 
     @ViewBuilder
-    private var uploadResult: some View {
-        switch model.uploadState {
+    private func uploadResult(for job: FeishuUploadJob, state: UploadState) -> some View {
+        switch state {
         case .idle:
             EmptyView()
 
@@ -436,17 +442,17 @@ struct RecorderPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
-                otherUploadTitle
+                uploadResultRecording(job)
                 HStack(spacing: 8) {
                     Button {
-                        model.confirmUploadDespiteDegradedAudio()
+                        model.confirmUploadDespiteDegradedAudio(for: job)
                     } label: {
                         Label(model.text("action.uploadAnyway"), systemImage: "arrow.up.circle")
                     }
                     .buttonStyle(MQButtonStyle(kind: .primary(MQTheme.warning), compact: true))
 
                     Button {
-                        model.revealLastUploadFolder()
+                        model.reveal(job.folderURL)
                     } label: {
                         Image(systemName: "folder")
                             .frame(width: 16, height: 16)
@@ -469,7 +475,7 @@ struct RecorderPanel: View {
                         .foregroundStyle(MQTheme.textPrimary)
                     Spacer()
                 }
-                otherUploadTitle
+                uploadResultRecording(job)
 
                 HStack(spacing: 8) {
                     Button {
@@ -489,7 +495,7 @@ struct RecorderPanel: View {
                     .help(model.text("help.copyMinute"))
 
                     Button {
-                        model.revealLastUploadFolder()
+                        model.reveal(job.folderURL)
                     } label: {
                         Image(systemName: "folder")
                             .frame(width: 16, height: 16)
@@ -515,9 +521,9 @@ struct RecorderPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
-                otherUploadTitle
+                uploadResultRecording(job)
                 Button {
-                    model.retryUpload()
+                    model.retryUpload(for: job)
                 } label: {
                     Label(model.text("action.retryUpload"), systemImage: "arrow.clockwise")
                 }
@@ -663,7 +669,7 @@ struct RecorderPanel: View {
                             systemImage: "arrow.clockwise"
                         )
                     }
-                    .disabled(model.uploads.current != nil)
+                    .disabled(model.uploads.isActive(entry.folderURL))
                     Button { model.copyFileToPasteboard(audio) } label: {
                         Label(model.text("action.copyAudioFile"), systemImage: "waveform")
                     }

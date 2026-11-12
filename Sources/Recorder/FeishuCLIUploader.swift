@@ -36,9 +36,15 @@ struct FeishuCLIUploader {
             || (["creating_minute", "minute_result_unknown"].contains(stage) && saved?.minuteToken == nil) {
             throw FeishuUploadError.checkpoint("上次创建请求的结果尚未确认，请先检查飞书云空间或妙记，避免重复创建。详细信息见 upload.log。")
         }
+        let existingMinuteURL = saved?.minuteURL.flatMap(URL.init(string:))
+        let resumingPendingNotes = stage == "notes_pending"
+            && saved?.minuteToken != nil && saved?.fileToken != nil && existingMinuteURL != nil
         let uploadAudioURL = try job.prepareAudioForUpload()
         UploadStatusStore.markUploading(job: job)
-        try UploadStatusStore.checkpoint(folderURL: job.folderURL, stage: "preparing", fingerprint: fingerprint)
+        // A retry's live phase must not replace the last known notes outcome on disk.
+        try UploadStatusStore.checkpoint(folderURL: job.folderURL,
+                                         stage: resumingPendingNotes ? "notes_pending" : "preparing",
+                                         fingerprint: fingerprint)
         UploadStatusStore.appendLog(folderURL: job.folderURL, "Prepared upload file: \(uploadAudioURL.lastPathComponent)")
 
         let driveJSON: Any
@@ -46,7 +52,7 @@ struct FeishuCLIUploader {
         let minutesJSON: Any
         let minuteURL: URL
         let minuteToken: String
-        if let token = saved?.minuteToken, let urlString = saved?.minuteURL, let url = URL(string: urlString),
+        if let token = saved?.minuteToken, let url = existingMinuteURL,
            let file = saved?.fileToken {
             await onProgress?(.checkingExisting)
             _ = try await runLogged(executable: executable,
@@ -56,7 +62,7 @@ struct FeishuCLIUploader {
             minuteToken = token
             minuteURL = url
             driveJSON = ["file_token": file, "resumed": true]
-            minutesJSON = ["minute_url": urlString, "resumed": true]
+            minutesJSON = ["minute_url": url.absoluteString, "resumed": true]
             UploadStatusStore.appendLog(folderURL: job.folderURL, "Resuming existing minute; no Drive or Minutes creation.")
         } else {
             if let token = saved?.fileToken {
@@ -104,7 +110,9 @@ struct FeishuCLIUploader {
                                              minuteURL: minuteURL, minuteToken: minuteToken)
             UploadStatusStore.markMinuteCreated(folderURL: job.folderURL, minuteURL: minuteURL, minuteToken: minuteToken)
         }
-        try UploadStatusStore.checkpoint(folderURL: job.folderURL, stage: "fetching_notes")
+        if !resumingPendingNotes {
+            try UploadStatusStore.checkpoint(folderURL: job.folderURL, stage: "fetching_notes")
+        }
 
         var notesJSON: Any?
         var notesFetchError: String?
@@ -124,6 +132,7 @@ struct FeishuCLIUploader {
                 UploadStatusStore.appendLog(folderURL: job.folderURL, "vc +notes failed: \(notesFetchError ?? "")")
             }
         } else {
+            if resumingPendingNotes { notesFetchError = "Notes were not fetched on this retry." }
             UploadStatusStore.appendLog(folderURL: job.folderURL, "vc +notes skipped by settings.")
         }
 

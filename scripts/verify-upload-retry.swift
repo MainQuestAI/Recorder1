@@ -225,10 +225,33 @@ struct UploadRetryProbe {
                 let pending = reloadedEntry()
                 try require(pending?.notesPending == true && pending?.minuteURL == result.minuteURL,
                             "the recordings library lost the pending notes status or link on reload")
+                try Data().write(to: destination.appendingPathComponent("fail-validate-once"))
+                scenarioPhases.removeAll()
+                do {
+                    _ = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) }
+                    throw ProbeError.failed("the fake existing-Minute validation did not fail")
+                } catch let error as ProbeError {
+                    throw error
+                } catch {
+                    UploadStatusStore.markFailed(job: scenarioJob, error: error)
+                }
+                try require(scenarioPhases == [.checkingExisting], "failed validation proceeded to fetch notes")
+                let afterFailedValidation = reloadedEntry()
+                try require(afterFailedValidation?.notesPending == true && afterFailedValidation?.minuteURL == result.minuteURL,
+                            "failed retry hid the pending notes status or link on reload")
+
+                var skipNotes = fast
+                skipNotes.fetchNotes = false
+                scenarioPhases.removeAll()
+                let skipped = try await skipNotes.upload(job: scenarioJob) { scenarioPhases.append($0) }
+                try require(scenarioPhases == [.checkingExisting, .savingResult], "disabled retry reported fetching notes")
+                try require(skipped.notesFetchError != nil && reloadedEntry()?.notesPending == true,
+                            "retry without fetching notes cleared the previous pending status")
+
                 scenarioPhases.removeAll()
                 let retry = try await fast.upload(job: scenarioJob) { scenarioPhases.append($0) }
                 try require(try calls("drive +upload") == 1 && calls("minutes +upload") == 1, "notes retry duplicated creation")
-                try require(try calls("minutes minutes") == 1, "existing minute was not validated")
+                try require(try calls("minutes minutes") == 3, "existing minute was not validated on each retry")
                 try require(scenarioPhases == [.checkingExisting, .fetchingNotes, .savingResult],
                             "notes retry reported a new upload or minute creation")
                 try require(retry.notesFetchError == nil && UploadStatusStore.readMetadata(folderURL: destination)?.uploadStage == "complete",
@@ -304,17 +327,31 @@ struct UploadRetryProbe {
                     "newest upload did not own its result actions")
         try require(presentation.current?.job == first && presentation.current?.phase == .savingResult,
                     "ongoing upload did not return after the newest upload completed")
-        try require(!presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
-                    "older result was allowed to replace the new link")
+        try require(presentation.isActive(first.folderURL) && !presentation.isActive(second.folderURL),
+                    "another recording's upload disabled the completed recording's retry")
+        let thirdFolder = first.folderURL.appendingPathComponent("unrelated")
+        try require(!presentation.isActive(thirdFolder), "another recording's upload disabled an unrelated recording")
+        try require(presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "an older successful upload was not allowed to run its automatic link actions")
         try require(presentation.current == nil && presentation.selectedJob == second
                     && presentation.result == .uploaded(secondURL, notesPending: true),
                     "a late callback changed the partial result or its recording")
+        try require(!presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "a duplicate completion was allowed to repeat link actions")
 
         try require(presentation.begin(first), "a finished upload could not restart")
         presentation.requireConfirmation("Check audio", for: second)
-        try require(!presentation.finish(first, with: .failed("Old failure")), "older failure replaced a newer confirmation")
+        try require(presentation.finish(first, with: .uploaded(minuteURL, notesPending: false)),
+                    "a newer confirmation prevented the earlier success from running its link actions")
         try require(presentation.selectedJob == second && presentation.result == .needsConfirmation("Check audio"),
-                    "confirmation action no longer points to the recording that needs review")
-        print("PASS overlapping upload progress, link ownership, and confirmation")
+                    "older success replaced a newer confirmation")
+        try require(presentation.current == nil && presentation.canConfirm(second),
+                    "the correct confirmation was unavailable without an active upload")
+        presentation.requireConfirmation("Check another recording", for: first)
+        try require(!presentation.canConfirm(second) && presentation.canConfirm(first),
+                    "a stale confirmation button could approve a different recording")
+        try require(presentation.begin(first) && !presentation.canConfirm(first),
+                    "a confirmation remained valid after its recording began uploading")
+        print("PASS concurrent upload controls, automatic link actions, and recording-specific confirmation")
     }
 }

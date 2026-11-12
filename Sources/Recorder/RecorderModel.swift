@@ -667,19 +667,13 @@ final class RecorderModel {
 
     // MARK: - Feishu upload
 
-    func retryUpload() {
-        guard let job = uploads.selectedJob else {
-            statusMessage = text("status.noAudioToUpload")
-            return
-        }
+    func retryUpload(for job: FeishuUploadJob) {
+        guard case .failed = uploads.result, uploads.selectedJob == job else { return }
         startUpload(job)
     }
 
-    func confirmUploadDespiteDegradedAudio() {
-        guard let job = uploads.selectedJob else {
-            statusMessage = text("status.noAudioToUpload")
-            return
-        }
+    func confirmUploadDespiteDegradedAudio(for job: FeishuUploadJob) {
+        guard uploads.canConfirm(job) else { return }
         UploadStatusStore.appendLog(folderURL: job.folderURL, "User confirmed upload despite degraded recording acceptance.")
         startUpload(job, confirmedDegraded: true)
     }
@@ -772,11 +766,6 @@ final class RecorderModel {
 
     func openMinuteURL(_ url: URL) {
         NSWorkspace.shared.open(url)
-    }
-
-    func revealLastUploadFolder() {
-        guard let folderURL = uploads.selectedJob?.folderURL else { return }
-        reveal(folderURL)
     }
 
     // MARK: - Recordings library
