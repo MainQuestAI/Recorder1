@@ -15,7 +15,6 @@ private enum MQTheme {
     static let warning = Color(red: 241 / 255, green: 196 / 255, blue: 15 / 255)
     static let danger = Color(red: 231 / 255, green: 76 / 255, blue: 60 / 255)
     static let info = Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255)
-    static let panelRadius: CGFloat = 20
     static let cardRadius: CGFloat = 10
     static let buttonRadius: CGFloat = 10
 }
@@ -149,9 +148,11 @@ struct RecorderPanel: View {
 
             controls
 
-            if showUpload {
-                uploadSection
+            if let upload = model.uploads.current {
+                uploadProgress(upload)
             }
+
+            uploadResult
 
             meters
 
@@ -167,15 +168,8 @@ struct RecorderPanel: View {
         }
         .padding(14)
         .frame(width: panelWidth)
-        .background(
-            RoundedRectangle(cornerRadius: MQTheme.panelRadius, style: .continuous)
-                .fill(MQTheme.page)
-                .overlay(
-                    RoundedRectangle(cornerRadius: MQTheme.panelRadius, style: .continuous)
-                        .stroke(MQTheme.borderStrong, lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.50), radius: 24, y: 12)
-        )
+        // The native menu-bar window supplies the outer shape and shadow.
+        .background(MQTheme.page)
         .foregroundStyle(MQTheme.textPrimary)
         .preferredColorScheme(.dark)
         // Suppress the auto-drawn focus ring on the first control when the
@@ -237,14 +231,7 @@ struct RecorderPanel: View {
 
     private var stateLabel: String {
         switch model.state {
-        case .idle:
-            switch model.uploadState {
-            case .idle: return model.text("state.ready")
-            case .needsConfirmation: return model.text("state.audioIncomplete")
-            case .running: return model.text("state.uploading")
-            case .uploaded: return model.text("state.uploaded")
-            case .failed: return model.text("state.uploadFailed")
-            }
+        case .idle:      return model.text("state.ready")
         case .recording: return model.text("state.recording")
         case .paused:    return model.text("state.paused")
         }
@@ -252,14 +239,7 @@ struct RecorderPanel: View {
 
     private var stateSymbolName: String {
         switch model.state {
-        case .idle:
-            switch model.uploadState {
-            case .idle: return "circle"
-            case .needsConfirmation: return "exclamationmark.triangle.fill"
-            case .running: return "arrow.up.circle.fill"
-            case .uploaded: return "checkmark.circle.fill"
-            case .failed: return "exclamationmark.triangle.fill"
-            }
+        case .idle:      return "circle"
         case .recording: return "record.circle.fill"
         case .paused:    return "pause.circle.fill"
         }
@@ -267,14 +247,7 @@ struct RecorderPanel: View {
 
     private var stateColor: Color {
         switch model.state {
-        case .idle:
-            switch model.uploadState {
-            case .idle: return MQTheme.textMuted
-            case .needsConfirmation: return MQTheme.warning
-            case .running: return MQTheme.info
-            case .uploaded: return MQTheme.success
-            case .failed: return MQTheme.warning
-            }
+        case .idle:      return MQTheme.textMuted
         case .recording: return MQTheme.danger
         case .paused:    return MQTheme.warning
         }
@@ -413,18 +386,47 @@ struct RecorderPanel: View {
 
     // MARK: - 2b. Feishu upload
 
-    private var showUpload: Bool {
-        model.uploadState != .idle
+    private func uploadProgress(_ upload: UploadPresentation.Progress) -> some View {
+        MQCard {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(MQTheme.info)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.text("upload.phase.\(upload.phase.rawValue)"))
+                        .font(.callout.weight(.medium))
+                    uploadTitle(upload.job)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private func uploadTitle(_ job: FeishuUploadJob) -> some View {
+        Text(job.meetingTitle ?? model.text("text.recordingFallback"))
+            .font(.caption)
+            .foregroundStyle(MQTheme.textSecondary)
+            .lineLimit(1)
     }
 
     @ViewBuilder
-    private var uploadSection: some View {
+    private var otherUploadTitle: some View {
+        if model.uploads.current != nil, let job = model.uploads.selectedJob {
+            uploadTitle(job)
+        }
+    }
+
+    @ViewBuilder
+    private var uploadResult: some View {
         switch model.uploadState {
         case .idle:
             EmptyView()
 
         case .needsConfirmation(let message):
             MQCard(spacing: 8) {
+                Text(model.text("state.audioIncomplete"))
+                    .font(.callout.weight(.medium))
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(MQTheme.warning)
@@ -434,6 +436,7 @@ struct RecorderPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
+                otherUploadTitle
                 HStack(spacing: 8) {
                     Button {
                         model.confirmUploadDespiteDegradedAudio()
@@ -456,29 +459,17 @@ struct RecorderPanel: View {
                 .controlSize(.small)
             }
 
-        case .running:
-            MQCard {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(MQTheme.info)
-                    Text(model.text("text.uploadingFeishu"))
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(MQTheme.textSecondary)
-                    Spacer()
-                }
-            }
-
-        case .uploaded(let url):
+        case .uploaded(let url, let notesPending):
             MQCard(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(MQTheme.success)
-                    Text(model.text("state.uploaded"))
+                    Text(model.text(notesPending ? "upload.notesPending" : "state.uploaded"))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(MQTheme.textPrimary)
                     Spacer()
                 }
+                otherUploadTitle
 
                 HStack(spacing: 8) {
                     Button {
@@ -513,6 +504,8 @@ struct RecorderPanel: View {
 
         case .failed(let message):
             MQCard(spacing: 8) {
+                Text(model.text("state.uploadFailed"))
+                    .font(.callout.weight(.medium))
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(MQTheme.warning)
@@ -522,6 +515,7 @@ struct RecorderPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
+                otherUploadTitle
                 Button {
                     model.retryUpload()
                 } label: {
@@ -669,7 +663,7 @@ struct RecorderPanel: View {
                             systemImage: "arrow.clockwise"
                         )
                     }
-                    .disabled(model.uploadState == .running)
+                    .disabled(model.uploads.current != nil)
                     Button { model.copyFileToPasteboard(audio) } label: {
                         Label(model.text("action.copyAudioFile"), systemImage: "waveform")
                     }
@@ -740,7 +734,9 @@ struct RecorderPanel: View {
         formatter.timeStyle = .short
         let when = formatter.string(from: entry.date)
         let status: String
-        if entry.isUploaded {
+        if entry.notesPending {
+            status = model.text("upload.notesPending")
+        } else if entry.isUploaded {
             status = model.text("recent.uploaded")
         } else if entry.uploadStatus == "failed" {
             status = model.text("recent.uploadFailed")

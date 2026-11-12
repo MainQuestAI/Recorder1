@@ -13,7 +13,8 @@ enum SystemAudioDiagnostics {
         Task { @MainActor in
             let model = RecorderModel()
             model.uploadExisting(RecordingEntry(folderURL: folder, title: "Integrity gate verification", date: Date(),
-                audioURL: folder.appendingPathComponent("audio.m4a"), transcriptURL: nil, minuteURL: nil, uploadStatus: "failed"))
+                audioURL: folder.appendingPathComponent("audio.m4a"), transcriptURL: nil, minuteURL: nil,
+                uploadStatus: "failed", uploadStage: nil))
             for _ in 0..<300 {
                 if case .needsConfirmation = model.uploadState {
                     print("PASS library upload is blocked by recording integrity before any CLI upload")
