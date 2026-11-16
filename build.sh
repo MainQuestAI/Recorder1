@@ -28,11 +28,11 @@ else
 fi
 
 echo "==> swift build -c release"
-BUILD_ARGS=()
-if [ -n "${SDKROOT:-}" ]; then
-    BUILD_ARGS+=(--sdk "$SDKROOT")
-fi
-swift build -c release "${BUILD_ARGS[@]}"
+SDK_PATH="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+# Clang uses this path to record the actual SDK version at link time.
+swift build -c release --sdk "$SDK_PATH" \
+    -Xswiftc -Xclang-linker -Xswiftc -isysroot \
+    -Xswiftc -Xclang-linker -Xswiftc "$SDK_PATH"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
